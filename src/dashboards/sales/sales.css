@@ -1,0 +1,83 @@
+/* Sales keeps the original mission-control navy look. Every rule is scoped under
+   `.sales-root` (the page's root element) so it overrides the hub's token-based
+   `.card-glass` / `.bg-grid` here and nowhere else — and ships only in the sales chunk. */
+
+.sales-root .card-glass {
+  background: rgba(10, 22, 40, 0.85);
+  border: 1px solid rgba(26, 45, 69, 0.8);
+  backdrop-filter: blur(12px);
+}
+
+.sales-root .card-glass-green {
+  background: rgba(10, 22, 40, 0.85);
+  border: 1px solid rgba(34, 197, 94, 0.3);
+  box-shadow: 0 0 20px rgba(34, 197, 94, 0.08);
+  backdrop-filter: blur(12px);
+}
+
+.sales-root.bg-grid {
+  background-image:
+    linear-gradient(rgba(26, 45, 69, 0.3) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(26, 45, 69, 0.3) 1px, transparent 1px);
+  background-size: 40px 40px;
+}
+
+/* ALL TIME view: the outbound tracker's achromatic surfaces (true black page, neutral greys
+   above it) so only the data carries hue. Keep in step with the dispatch dashboard's .dark. */
+.sales-root.bg-grid.theme-black {
+  background-color: #000000;
+  background-image:
+    linear-gradient(rgba(42, 42, 42, 0.35) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(42, 42, 42, 0.35) 1px, transparent 1px);
+}
+.sales-root.theme-black .card-glass {
+  background: rgba(17, 17, 17, 0.85);
+  border-color: rgba(42, 42, 42, 0.8);
+}
+.sales-root.theme-black .border-\[\#1a2d45\],
+.sales-root.theme-black .border-\[\#1a2d45\]\/60 {
+  border-color: #2a2a2a;
+}
+.sales-root.theme-black .bg-\[\#1a2d45\] {
+  background-color: #2a2a2a;
+}
+
+.sales-root .progress-bar-track {
+  background: rgba(26, 45, 69, 0.6);
+  border-radius: 9999px;
+  overflow: hidden;
+}
+.sales-root .progress-bar-fill {
+  height: 100%;
+  border-radius: 9999px;
+  transition: width 1.5s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.sales-root .glow-green {
+  box-shadow: 0 0 15px rgba(34, 197, 94, 0.4), 0 0 30px rgba(34, 197, 94, 0.15);
+}
+
+/* Pinned green: the hub's .pulse-dot follows --primary, which darkens on the light theme. */
+.sales-root .pulse-dot {
+  background: #22c55e;
+}
+
+@keyframes glowPulse {
+  0%, 100% { box-shadow: 0 0 16px rgba(34, 197, 94, 0.08); }
+  50% { box-shadow: 0 0 36px rgba(34, 197, 94, 0.28); }
+}
+@keyframes floatIn {
+  from { opacity: 0; transform: translateY(12px) scale(0.96); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+.sales-root .animate-glow-pulse {
+  animation: glowPulse 3s ease-in-out infinite;
+}
+.sales-root .video-float {
+  animation: floatIn 0.7s cubic-bezier(0.22, 1, 0.36, 1) 0.6s both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sales-root .animate-glow-pulse,
+  .sales-root .video-float { animation: none; }
+}

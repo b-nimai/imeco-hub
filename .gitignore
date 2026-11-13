@@ -1,0 +1,37 @@
+# Secrets: deny every .env variant, allow only the template back.
+.env
+.env.*
+*.env
+!.env.example
+
+# ── Real business data — never commit (this repo is public) ──────────────────────────────
+# Price tracker demo fallback: a real scrape (SKUs, prices, listing URLs).
+public/demo-prices.json
+# Test fixtures that are real sheet snapshots (dispatch volumes per SKU/channel).
+**/__fixtures__/
+# Any exported data someone drops in the tree by accident.
+*.xlsx
+*.xls
+*.csv
+*.tsv
+
+# Build / tooling
+node_modules/
+dist/
+dist-ssr/
+*.local
+.vite/
+*.tsbuildinfo
+coverage/
+.eslintcache
+*.log
+
+# Deploy
+.vercel/
+
+# Editors / OS
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+Thumbs.db
