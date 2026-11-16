@@ -8,6 +8,7 @@ All IMECO dashboards in one site, each as its own section, plus a full-screen TV
 | Price Tracker | `/prices`, `/prices/<tab>` | `/tv/prices` | Supabase (PostgREST, read-only anon key) |
 | B2B Billing | `/billing` | `/tv/billing` | Google Sheets |
 | Marketplace Dispatch | `/dispatch` | `/tv/dispatch` | Google Sheets (Outbound Tracker) |
+| Warehouse Stock | `/stock`, `/stock/<tab>` | `/tv/stock` | Google Sheets (Dankuni & Chennai Stock Workbooks via Apps Script Proxy / Snapshot) |
 
 The Price Tracker's tabs are `overview`, `prices`, `trends`, `availability`, `reviews`, `competitors` and `search`. Old `#trends`-style links are redirected to the matching routed path.
 

@@ -5,7 +5,7 @@ import reactRefresh from 'eslint-plugin-react-refresh';
 import tseslint from 'typescript-eslint';
 import { defineConfig, globalIgnores } from 'eslint/config';
 
-const DASHBOARDS = ['sales', 'prices', 'billing', 'dispatch'];
+const DASHBOARDS = ['sales', 'prices', 'billing', 'dispatch', 'stock'];
 
 export default defineConfig([
   globalIgnores(['dist']),

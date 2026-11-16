@@ -19,19 +19,19 @@ function DialogContent({
     <DialogPrimitive.Portal>
       <DialogPrimitive.Backdrop
         data-slot="dialog-overlay"
-        className="fixed inset-0 z-50 bg-black/50 backdrop-blur-[2px] transition-opacity duration-300 ease-out data-ending-style:opacity-0 data-starting-style:opacity-0"
+        className="fixed inset-0 z-50 bg-black/65 backdrop-blur-xs transition-opacity duration-300 ease-out data-ending-style:opacity-0 data-starting-style:opacity-0"
       />
       {/* A sheet that slides in from the screen edge, and back out the same way on close. */}
       <DialogPrimitive.Popup
         data-slot="dialog-content"
         data-side={side}
         className={cn(
-          "group/dialog fixed inset-y-2 z-50 flex w-[calc(100%-1rem)] flex-col overflow-hidden rounded-2xl border border-border bg-background text-foreground shadow-2xl outline-none transition-transform duration-300 ease-[cubic-bezier(0.32,0.72,0,1)] motion-reduce:transition-none",
-          // Floats 8px off the screen edges, and slides a little past its own width so the
+          "group/dialog fixed inset-y-2.5 z-50 flex w-[calc(100%-1.25rem)] flex-col overflow-hidden rounded-2xl border border-border/80 bg-background/95 text-foreground shadow-[0_24px_80px_-12px_rgba(0,0,0,0.85)] ring-1 ring-foreground/5 backdrop-blur-xl outline-none transition-transform duration-300 ease-[cubic-bezier(0.32,0.72,0,1)] before:pointer-events-none before:absolute before:inset-x-0 before:top-0 before:h-px before:bg-gradient-to-r before:from-transparent before:via-foreground/20 before:to-transparent motion-reduce:transition-none",
+          // Floats off the screen edges, and slides a little past its own width so the
           // shadow is gone too when it is closed.
           side === "right"
-            ? "right-2 data-ending-style:translate-x-[calc(100%+1rem)] data-starting-style:translate-x-[calc(100%+1rem)]"
-            : "left-2 data-ending-style:-translate-x-[calc(100%+1rem)] data-starting-style:-translate-x-[calc(100%+1rem)]",
+            ? "right-2.5 data-ending-style:translate-x-[calc(100%+1.5rem)] data-starting-style:translate-x-[calc(100%+1.5rem)]"
+            : "left-2.5 data-ending-style:-translate-x-[calc(100%+1.5rem)] data-starting-style:-translate-x-[calc(100%+1.5rem)]",
           className
         )}
         {...props}
@@ -39,7 +39,8 @@ function DialogContent({
         {children}
         {/* Close sits on the sheet's inner edge — top-left for a right-hand sheet. */}
         <DialogPrimitive.Close
-          className="absolute top-3.5 flex size-9 items-center justify-center rounded-lg border border-border bg-muted text-muted-foreground shadow-sm transition-all duration-150 outline-none group-data-[side=left]/dialog:right-3.5 group-data-[side=right]/dialog:left-3.5 hover:scale-105 hover:border-foreground/20 hover:bg-foreground/10 hover:text-foreground active:scale-95 focus-visible:ring-3 focus-visible:ring-ring/50"
+          title="Close (Esc)"
+          className="absolute top-4 flex size-9 items-center justify-center rounded-xl border border-border/80 bg-muted/60 text-muted-foreground shadow-xs transition-all duration-150 outline-none group-data-[side=left]/dialog:right-4 group-data-[side=right]/dialog:left-4 hover:scale-105 hover:border-foreground/25 hover:bg-muted hover:text-foreground active:scale-95 focus-visible:ring-3 focus-visible:ring-ring/50"
           aria-label="Close"
         >
           <XIcon className="size-4" />
@@ -53,7 +54,10 @@ function DialogHeader({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
       data-slot="dialog-header"
-      className={cn("flex flex-none flex-col gap-1 border-b border-border px-5 py-4 group-data-[side=left]/dialog:pr-16 group-data-[side=right]/dialog:pl-16", className)}
+      className={cn(
+        "flex flex-none flex-col gap-1 border-b border-border/80 bg-card/45 px-6 py-4 backdrop-blur-md group-data-[side=left]/dialog:pr-16 group-data-[side=right]/dialog:pl-16",
+        className
+      )}
       {...props}
     />
   )
@@ -63,7 +67,7 @@ function DialogBody({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
       data-slot="dialog-body"
-      className={cn("min-h-0 flex-1 overflow-y-auto px-5 py-4", className)}
+      className={cn("min-h-0 flex-1 overflow-y-auto px-6 py-5", className)}
       {...props}
     />
   )
@@ -73,7 +77,7 @@ function DialogTitle({ className, ...props }: DialogPrimitive.Title.Props) {
   return (
     <DialogPrimitive.Title
       data-slot="dialog-title"
-      className={cn("text-base font-semibold", className)}
+      className={cn("text-base font-semibold tracking-tight text-foreground", className)}
       {...props}
     />
   )
