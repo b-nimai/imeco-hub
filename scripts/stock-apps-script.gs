@@ -210,11 +210,22 @@ function buildPayload() {
     'IMECO': true, 'DENCRUS': true, 'Total Stock': true,
     'Stock Received': true, 'Packaging Count': true, 'SHAVECO': true, 'Block Stock': true,
   };
+  var templateHeaders = (dankuni['Flipkart'] || [])[1] || [];
   var dankuniOutflows = {};
   Object.keys(dankuni).forEach(function (tab) {
     if (skipDankuni[tab]) return;
     var rows = dankuni[tab] || [];
-    var dates = resolveHeaderDates(rows[1] || [], 3);
+    var rawHeaders = rows[1] || [];
+    var maxCols = rawHeaders.length;
+    for (var mr = 2; mr < rows.length; mr++) {
+      if (rows[mr] && rows[mr].length > maxCols) maxCols = rows[mr].length;
+    }
+    var paddedHeaders = [];
+    for (var hc = 0; hc < maxCols; hc++) {
+      var cellVal = rawHeaders[hc];
+      paddedHeaders.push(cellVal !== undefined && cellVal !== '' ? cellVal : (templateHeaders[hc] || ''));
+    }
+    var dates = resolveHeaderDates(paddedHeaders, 3);
     for (var r = 2; r < rows.length; r++) {
       var row = rows[r] || [];
       var sku = String(row[0] == null ? '' : row[0]).trim();
@@ -231,7 +242,7 @@ function buildPayload() {
           datedSum += v;
         }
       });
-      var chTotal = Math.max(tabTotal, datedSum);
+      var chTotal = tabTotal > 0 ? tabTotal : datedSum;
       if (chTotal > 0) entry.byChannel[tab] = (entry.byChannel[tab] || 0) + chTotal;
     }
   });

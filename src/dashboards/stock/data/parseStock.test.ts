@@ -101,4 +101,44 @@ describe('buildStockDashboardSummary', () => {
     ]);
     expect(chennaiSummary.totals.totalCurrentStock).toBe(37428);
   });
+
+  it('reconciles 100% of all 162 catalog items against raw sheet stock and sold totals', () => {
+    const allSummary = buildStockDashboardSummary(payload, {
+      warehouse: 'all',
+      velocityWindow: 30,
+      asOfDate: '2026-11-16',
+    });
+    const dkSummary = buildStockDashboardSummary(payload, {
+      warehouse: 'dankuni',
+      velocityWindow: 30,
+      asOfDate: '2026-11-16',
+    });
+
+    expect(allSummary.products).toHaveLength(payload.catalog.length);
+
+    for (let i = 0; i < payload.catalog.length; i++) {
+      const raw = payload.catalog[i];
+      const allProd = allSummary.products[i];
+      const dkProd = dkSummary.products[i];
+
+      // Dankuni stock and Chennai stock must match Total Stock Col F & Col G on every row
+      expect(allProd.dankuniStock).toBe(raw.dankuniNewLogoStock);
+      expect(allProd.chennaiStock).toBe(raw.chennaiStock);
+      expect(allProd.currentStock).toBe(raw.dankuniNewLogoStock + raw.chennaiStock);
+      expect(dkProd.currentStock).toBe(raw.dankuniNewLogoStock);
+
+      // Final day of dailySeries must match currentStock
+      expect(allProd.dailySeries[allProd.dailySeries.length - 1].stock).toBe(allProd.currentStock);
+      expect(dkProd.dailySeries[dkProd.dailySeries.length - 1].stock).toBe(dkProd.currentStock);
+    }
+
+    // Verify aggregate totals for Bestseller + Active (42 SKUs)
+    const liveProds = allSummary.products.filter(
+      (p) => p.status === 'Bestseller' || p.status === 'Active',
+    );
+    expect(liveProds).toHaveLength(42);
+    expect(liveProds.reduce((s, p) => s + p.dankuniStock, 0)).toBe(617356);
+    expect(liveProds.reduce((s, p) => s + p.chennaiStock, 0)).toBe(37428);
+    expect(liveProds.reduce((s, p) => s + p.currentStock, 0)).toBe(654784);
+  });
 });

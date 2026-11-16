@@ -193,10 +193,16 @@ const SKIP_DANKUNI = new Set([
   'SHAVECO',
   'Block Stock',
 ]);
+const templateHeaders = (dankuni['Flipkart'] || [])[1] || [];
 const dankuniOutflows = {};
 for (const [tab, rows] of Object.entries(dankuni)) {
   if (SKIP_DANKUNI.has(tab)) continue;
-  const dates = resolveHeaderDates(rows[1] || [], 3);
+  const rawHeaders = rows[1] || [];
+  const maxCols = Math.max(rawHeaders.length, ...rows.slice(2).map((r) => (r ? r.length : 0)));
+  const paddedHeaders = Array.from({ length: maxCols }, (_, c) =>
+    String(rawHeaders[c] ?? '').trim() ? rawHeaders[c] : (templateHeaders[c] ?? ''),
+  );
+  const dates = resolveHeaderDates(paddedHeaders, 3);
   for (let r = 2; r < rows.length; r++) {
     const row = rows[r] || [];
     const sku = String(row[0] ?? '').trim();
@@ -215,7 +221,7 @@ for (const [tab, rows] of Object.entries(dankuni)) {
         datedSum += v;
       }
     }
-    const chTotal = Math.max(tabTotal, datedSum);
+    const chTotal = tabTotal > 0 ? tabTotal : datedSum;
     if (chTotal > 0) {
       entry.byChannel[tab] = (entry.byChannel[tab] || 0) + chTotal;
     }

@@ -103,11 +103,11 @@ export function buildStockDashboardSummary(
 
     let currentStock: number;
     if (warehouse === 'dankuni') {
-      currentStock = dankuniStock + oldLogoStock;
+      currentStock = dankuniStock;
     } else if (warehouse === 'chennai') {
       currentStock = chennaiStock;
     } else {
-      currentStock = dankuniStock + chennaiStock + oldLogoStock;
+      currentStock = dankuniStock + chennaiStock;
     }
 
     const upcomingStock = warehouse === 'chennai' ? 0 : item.upcomingStock;
@@ -122,20 +122,22 @@ export function buildStockDashboardSummary(
 
     if (warehouse !== 'chennai') {
       openStock += dkIn?.openStock ?? 0;
-      totalReceived += dkIn?.totalReceived ?? (isRecoveredDuplicate ? dankuniStock : 0);
+      totalReceived +=
+        rollup?.totalStockReceived ?? dkIn?.totalReceived ?? (isRecoveredDuplicate ? dankuniStock : 0);
       if (dkIn?.byDate) {
         for (const [d, v] of Object.entries(dkIn.byDate)) {
-          inflowByDate[d] = (inflowByDate[d] ?? 0) + v;
+          const bucketDate = d > asOfDate ? asOfDate : d;
+          inflowByDate[bucketDate] = (inflowByDate[bucketDate] ?? 0) + v;
         }
       }
       if (dkOut?.byDate) {
         for (const [d, v] of Object.entries(dkOut.byDate)) {
-          outflowByDate[d] = (outflowByDate[d] ?? 0) + v;
+          const bucketDate = d > asOfDate ? asOfDate : d;
+          outflowByDate[bucketDate] = (outflowByDate[bucketDate] ?? 0) + v;
         }
       }
       if (dkOut?.byChannel) {
         for (const [ch, v] of Object.entries(dkOut.byChannel)) {
-          if (ch === 'Block Stock') continue;
           channelTotals[ch] = (channelTotals[ch] ?? 0) + v;
         }
       }
@@ -145,12 +147,14 @@ export function buildStockDashboardSummary(
       totalReceived += chReceivedTotal;
       if (chIn?.byDate) {
         for (const [d, v] of Object.entries(chIn.byDate)) {
-          inflowByDate[d] = (inflowByDate[d] ?? 0) + v;
+          const bucketDate = d > asOfDate ? asOfDate : d;
+          inflowByDate[bucketDate] = (inflowByDate[bucketDate] ?? 0) + v;
         }
       }
       if (chOut?.byDate) {
         for (const [d, v] of Object.entries(chOut.byDate)) {
-          outflowByDate[d] = (outflowByDate[d] ?? 0) + v;
+          const bucketDate = d > asOfDate ? asOfDate : d;
+          outflowByDate[bucketDate] = (outflowByDate[bucketDate] ?? 0) + v;
         }
       }
       if (chOut?.byChannel) {
@@ -163,7 +167,13 @@ export function buildStockDashboardSummary(
 
     const datedSoldSum = Object.values(outflowByDate).reduce((a, b) => a + b, 0);
     const channelSoldSum = Object.values(channelTotals).reduce((a, b) => a + b, 0);
-    const totalSold = Math.max(datedSoldSum, channelSoldSum);
+    const dankuniAuthoritativeSold = rollup?.totalSold ?? Math.max(datedSoldSum, channelSoldSum);
+    const totalSold =
+      warehouse === 'dankuni'
+        ? dankuniAuthoritativeSold
+        : warehouse === 'chennai'
+          ? chSoldTotal
+          : dankuniAuthoritativeSold + chSoldTotal;
 
     // Find last sale date and last restock date (on or before asOfDate)
     const saleDates = Object.entries(outflowByDate)
