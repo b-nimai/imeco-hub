@@ -6,9 +6,12 @@ import type { StockRawPayload } from '@/dashboards/stock/data/types';
 const STORAGE_KEY = 'hub:stock:v1';
 const TTL_MS = 30 * 60 * 1000; // 30 minutes
 
-const APPS_SCRIPT_URL = (
-  import.meta.env.VITE_STOCK_APPS_SCRIPT_URL as string | undefined
-)?.trim();
+const DEFAULT_APPS_SCRIPT_URL =
+  'https://script.google.com/macros/s/AKfycbywnYoFJPEcsgOzfMSD048-CDT79PJ5cVQnPtugKOEFKkcOYnKGjMA_qk8HRaAZQK-WQw/exec';
+
+const APPS_SCRIPT_URL =
+  (import.meta.env.VITE_STOCK_APPS_SCRIPT_URL as string | undefined)?.trim() ||
+  DEFAULT_APPS_SCRIPT_URL;
 
 interface CachedStockPayload {
   fetchedAt: number;

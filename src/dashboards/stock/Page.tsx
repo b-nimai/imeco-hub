@@ -1,9 +1,9 @@
 import { Info, RefreshCw } from 'lucide-react';
-import { lazy, Suspense, useMemo, useState } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router';
 
 import { ProductStockModal } from '@/dashboards/stock/components/ProductStockModal';
-import { fmtShortDate } from '@/dashboards/stock/data/format';
+import { fmtSyncTime } from '@/dashboards/stock/data/format';
 import { buildStockDashboardSummary } from '@/dashboards/stock/data/parseStock';
 import type {
   ProductStatus,
@@ -62,6 +62,12 @@ export default function StockPage() {
   const [velocityWindow, setVelocityWindow] = useState<VelocityWindow>(30);
   const [selectedId, setSelectedId] = useState<string | null>(() => searchParams.get('sku'));
   const [showSetupModal, setShowSetupModal] = useState(false);
+  const [nowMs, setNowMs] = useState(() => Date.now());
+
+  useEffect(() => {
+    const id = setInterval(() => setNowMs(Date.now()), 30_000);
+    return () => clearInterval(id);
+  }, []);
 
   const summary = useMemo(
     () =>
@@ -193,7 +199,7 @@ export default function StockPage() {
             ))}
           </div>
 
-          {/* Data source badge & refresh */}
+          {/* Data source & Last Sync Time badge */}
           <button
             type="button"
             onClick={() => setShowSetupModal(true)}
@@ -205,20 +211,25 @@ export default function StockPage() {
                   ? 'border-emerald-500/35 bg-emerald-500/10 text-emerald-300'
                   : 'border-border bg-card text-muted-foreground hover:text-foreground',
             )}
-            title="Click for Google Apps Script proxy connection details"
+            title={
+              fetchedAt
+                ? `Last synced: ${new Date(fetchedAt).toLocaleString('en-IN')} · Auto-refreshes every 30m`
+                : 'Click for Google Apps Script proxy connection details'
+            }
           >
             <span
               className={cn(
                 'size-2 rounded-full',
+                syncing && 'animate-pulse',
                 error ? 'bg-rose-400' : isLiveConfigured ? 'bg-emerald-400' : 'bg-sky-400',
               )}
             />
-            <span>
-              {error
-                ? 'Proxy Error'
-                : isLiveConfigured
-                  ? 'Live Proxy'
-                  : `Synced (${fmtShortDate(summary.asOfDate, true)})`}
+            <span className="font-mono text-[11px] tabular-nums">
+              {syncing
+                ? 'Syncing…'
+                : error
+                  ? `Cached · ${fmtSyncTime(fetchedAt, nowMs)}`
+                  : `Synced ${fmtSyncTime(fetchedAt, nowMs)}`}
             </span>
             <Info className="size-3.5 opacity-70" />
           </button>
