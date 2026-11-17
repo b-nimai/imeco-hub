@@ -49,7 +49,10 @@ function diffDays(isoA, isoB) {
 }
 
 function formatCellHeader(cell) {
-  if (cell instanceof Date && !isNaN(cell.getTime())) {
+  // Date cells are written as MM-DD-YYYY on purpose: the Dankuni sheet stores some dates with day
+  // and month swapped, and resolveHeaderDates() fixes those using neighbouring columns. Do NOT
+  // switch to an unambiguous format here — it bypasses that correction and misplaces sales.
+  if (Object.prototype.toString.call(cell) === '[object Date]' && !isNaN(cell.getTime())) {
     var d = cell.getDate();
     var m = cell.getMonth() + 1;
     var y = cell.getFullYear();
@@ -136,6 +139,46 @@ function num(v) {
   return isFinite(n) ? n : 0;
 }
 
+// ── Tab detection ───────────────────────────────────────────────────────────────────────────
+// Tabs are recognised by their layout, not a hardcoded list of names, so new brands, renamed
+// sales channels and extra scratch tabs are handled automatically. Only the structural input
+// tabs are looked up by name (case/space-insensitive).
+
+function normTab(name) {
+  return String(name).replace(/\s+/g, ' ').trim().toLowerCase();
+}
+
+/** Find a tab by name ignoring case and extra spaces; returns its name or null. */
+function findTab(book, wanted) {
+  var w = normTab(wanted);
+  var names = Object.keys(book);
+  for (var i = 0; i < names.length; i++) {
+    if (normTab(names[i]) === w) return names[i];
+  }
+  return null;
+}
+
+function rowHas(row, re) {
+  return (row || []).some(function (c) { return re.test(String(c == null ? '' : c)); });
+}
+
+/** Brand totals tab (e.g. IMECO, DENCRUS): row 1 headers include "Total Sold" and "Current Stock". */
+function isBrandTotalsTab(rows) {
+  var h = rows[0] || [];
+  return rowHas(h, /total sold/i) && rowHas(h, /current stock/i);
+}
+
+var DATE_HEADER_RE = /\b\d{1,2}[-\s\/.]+(?:[A-Za-z]{3,9}|\d{1,2})[-\s\/.]+\d{2,4}\b/;
+
+/** Sales tab: the header row (row 2) has at least one real date column from `firstCol` on. */
+function isSalesTab(rows, firstCol) {
+  var h = rows[1] || [];
+  for (var c = firstCol; c < h.length; c++) {
+    if (DATE_HEADER_RE.test(formatCellHeader(h[c]))) return true;
+  }
+  return false;
+}
+
 function buildPayload() {
   var dankuniBook = SpreadsheetApp.openById(DANKUNI_SPREADSHEET_ID);
   var chennaiBook = SpreadsheetApp.openById(CHENNAI_SPREADSHEET_ID);
@@ -150,8 +193,36 @@ function buildPayload() {
     chennai[s.getName()] = s.getDataRange().getValues();
   });
 
+  // Structural input tabs (looked up by name, tolerant of case/spacing).
+  var DK_TOTAL = findTab(dankuni, 'Total Stock');
+  var DK_RECEIVED = findTab(dankuni, 'Stock Received');
+  var DK_PACKAGING = findTab(dankuni, 'Packaging Count');
+  var DK_BLOCK = findTab(dankuni, 'Block Stock');
+  var CH_CURRENT = findTab(chennai, 'CURRENT');
+  var CH_RECEIVED = findTab(chennai, 'STOCK RECEIVED');
+
+  // Classify every remaining tab by layout. Recorded in meta.tabRoles for verification.
+  var dkRoles = {};
+  Object.keys(dankuni).forEach(function (tab) {
+    if (tab === DK_TOTAL) dkRoles[tab] = 'total-stock';
+    else if (tab === DK_RECEIVED) dkRoles[tab] = 'stock-received';
+    else if (tab === DK_PACKAGING) dkRoles[tab] = 'packaging';
+    else if (tab === DK_BLOCK) dkRoles[tab] = 'block-stock';
+    else if (isBrandTotalsTab(dankuni[tab])) dkRoles[tab] = 'brand-totals';
+    else if (isSalesTab(dankuni[tab], 3)) dkRoles[tab] = 'sales';
+    else dkRoles[tab] = 'ignored';
+  });
+  var chRoles = {};
+  Object.keys(chennai).forEach(function (tab) {
+    if (tab === CH_CURRENT) chRoles[tab] = 'current';
+    else if (tab === CH_RECEIVED) chRoles[tab] = 'stock-received';
+    else if (isBrandTotalsTab(chennai[tab])) chRoles[tab] = 'brand-totals';
+    else if (isSalesTab(chennai[tab], 3)) chRoles[tab] = 'sales';
+    else chRoles[tab] = 'ignored';
+  });
+
   var rollups = {};
-  ['IMECO', 'DENCRUS'].forEach(function (tabName) {
+  Object.keys(dkRoles).filter(function (t) { return dkRoles[t] === 'brand-totals'; }).forEach(function (tabName) {
     var rows = dankuni[tabName] || [];
     var header = rows[0] || [];
     var totalSoldIdx = header.findIndex(function (h) { return /total sold/i.test(String(h)); });
@@ -174,7 +245,7 @@ function buildPayload() {
   });
 
   var packaging = {};
-  var pkgRows = dankuni['Packaging Count'] || [];
+  var pkgRows = (DK_PACKAGING && dankuni[DK_PACKAGING]) || [];
   for (var pr = 1; pr < pkgRows.length; pr++) {
     var prow = pkgRows[pr] || [];
     var psku = String(prow[0] == null ? '' : prow[0]).trim();
@@ -185,7 +256,7 @@ function buildPayload() {
     };
   }
 
-  var srRows = dankuni['Stock Received'] || [];
+  var srRows = (DK_RECEIVED && dankuni[DK_RECEIVED]) || [];
   var srDates = resolveHeaderDates(srRows[1] || [], 4);
   var dankuniInflows = {};
   for (var sr = 2; sr < srRows.length; sr++) {
@@ -206,14 +277,16 @@ function buildPayload() {
     };
   }
 
-  var skipDankuni = {
-    'IMECO': true, 'DENCRUS': true, 'Total Stock': true,
-    'Stock Received': true, 'Packaging Count': true, 'SHAVECO': true, 'Block Stock': true,
-  };
-  var templateHeaders = (dankuni['Flipkart'] || [])[1] || [];
+  // Template for padding short header rows: the sales tab with the widest header row.
+  var templateHeaders = [];
+  Object.keys(dkRoles).forEach(function (t) {
+    if (dkRoles[t] !== 'sales') return;
+    var h = (dankuni[t] || [])[1] || [];
+    if (h.length > templateHeaders.length) templateHeaders = h;
+  });
   var dankuniOutflows = {};
   Object.keys(dankuni).forEach(function (tab) {
-    if (skipDankuni[tab]) return;
+    if (dkRoles[tab] !== 'sales') return;
     var rows = dankuni[tab] || [];
     var rawHeaders = rows[1] || [];
     var maxCols = rawHeaders.length;
@@ -247,7 +320,7 @@ function buildPayload() {
     }
   });
 
-  var blkRows = dankuni['Block Stock'] || [];
+  var blkRows = (DK_BLOCK && dankuni[DK_BLOCK]) || [];
   for (var br = 2; br < blkRows.length; br++) {
     var brow = blkRows[br] || [];
     var bsku = String(brow[0] == null ? '' : brow[0]).trim();
@@ -258,7 +331,7 @@ function buildPayload() {
     }
   }
 
-  var chSrRows = chennai['STOCK RECEIVED'] || [];
+  var chSrRows = (CH_RECEIVED && chennai[CH_RECEIVED]) || [];
   var chSrDates = resolveHeaderDates(chSrRows[1] || [], 3);
   var chennaiInflows = {};
   for (var cr = 2; cr < chSrRows.length; cr++) {
@@ -274,10 +347,22 @@ function buildPayload() {
     chennaiInflows[csku] = { totalReceived: num(crow[2]), byDate: cByDate };
   }
 
-  var skipChennai = { 'IMECO': true, 'CURRENT': true, 'STOCK RECEIVED': true };
+  // Chennai CURRENT tab: SKU | Products Name | Current Stock — the Chennai team's own stock count.
+  var chennaiCurrent = {};
+  var curRows = (CH_CURRENT && chennai[CH_CURRENT]) || [];
+  var curHeader = curRows[0] || [];
+  var curIdx = curHeader.findIndex(function (h) { return /current stock/i.test(String(h)); });
+  if (curIdx < 0) curIdx = 2;
+  for (var cu = 1; cu < curRows.length; cu++) {
+    var curow = curRows[cu] || [];
+    var cusku = String(curow[0] == null ? '' : curow[0]).trim();
+    if (!cusku || /^sku$/i.test(cusku) || /^packaging/i.test(cusku)) continue;
+    chennaiCurrent[cusku] = num(curow[curIdx]);
+  }
+
   var chennaiOutflows = {};
   Object.keys(chennai).forEach(function (tab) {
-    if (skipChennai[tab]) return;
+    if (chRoles[tab] !== 'sales') return;
     var rows = chennai[tab] || [];
     var dates = resolveHeaderDates(rows[1] || [], 3);
     for (var r = 2; r < rows.length; r++) {
@@ -302,7 +387,7 @@ function buildPayload() {
   });
 
   var catalog = [];
-  var tsRows = dankuni['Total Stock'] || [];
+  var tsRows = (DK_TOTAL && dankuni[DK_TOTAL]) || [];
   var seenSkus = {};
   for (var tr = 2; tr < tsRows.length; tr++) {
     var trow = tsRows[tr] || [];
@@ -340,6 +425,18 @@ function buildPayload() {
     dankuniOutflows: dankuniOutflows,
     chennaiInflows: chennaiInflows,
     chennaiOutflows: chennaiOutflows,
+    chennaiCurrent: chennaiCurrent,
+    meta: {
+      dankuniTabs: Object.keys(dankuni),
+      chennaiTabs: Object.keys(chennai),
+      tabRoles: { dankuni: dkRoles, chennai: chRoles },
+      missingTabs: [
+        !DK_TOTAL && 'Dankuni: Total Stock',
+        !DK_RECEIVED && 'Dankuni: Stock Received',
+        !CH_CURRENT && 'Chennai: CURRENT',
+        !CH_RECEIVED && 'Chennai: STOCK RECEIVED',
+      ].filter(Boolean),
+    },
   };
 }
 

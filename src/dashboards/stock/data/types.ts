@@ -48,6 +48,10 @@ export interface StockRawPayload {
   dankuniOutflows: Record<string, OutflowItemRaw>;
   chennaiInflows: Record<string, InflowItemRaw>;
   chennaiOutflows: Record<string, OutflowItemRaw>;
+  /** Chennai workbook CURRENT tab (SKU -> Current Stock). Optional: older Apps Script deployments omit it. */
+  chennaiCurrent?: Record<string, number>;
+  /** Diagnostic: tab names seen in each workbook. */
+  meta?: { dankuniTabs?: string[]; chennaiTabs?: string[] };
 }
 
 export interface DailyStockPoint {
@@ -85,6 +89,12 @@ export interface ProductStockAnalytics {
   // Warehouse stock breakdown
   dankuniStock: number;
   chennaiStock: number;
+  /** Cross-check of Chennai stock between Dankuni Total Stock Col G and Chennai CURRENT tab. */
+  chennaiCheck: ChennaiCheck;
+  /** Chennai stock as written in Dankuni workbook → Total Stock → Col G. */
+  chennaiStockSheetG: number;
+  /** Chennai stock as written in Chennai workbook → CURRENT tab (null if tab/SKU unavailable). */
+  chennaiStockCurrentTab: number | null;
   oldLogoStock: number;
   upcomingStock: number;
   currentStock: number; // Selected warehouse scope's current available stock
@@ -134,11 +144,38 @@ export interface ProductStockAnalytics {
   health: StockHealth;
 }
 
+/**
+ * - `verified`: Col G and CURRENT tab agree.
+ * - `mismatch`: both present but differ — the CURRENT tab value is shown.
+ * - `current-only` / `sheetg-only`: only one source has the SKU, so it can't be cross-checked.
+ * - `none`: no Chennai stock in either source.
+ */
+export type ChennaiCheck = 'verified' | 'mismatch' | 'current-only' | 'sheetg-only' | 'none';
+
+export interface ChennaiMismatch {
+  sku: string;
+  name: string;
+  sheetG: number;
+  currentTab: number;
+}
+
+export interface ChennaiVerification {
+  /** False when the Apps Script deployment doesn't send the CURRENT tab yet (Col G is used alone). */
+  currentTabAvailable: boolean;
+  verifiedCount: number;
+  mismatches: ChennaiMismatch[];
+  /** SKUs only in Col G (CURRENT tab has no row for them). */
+  sheetGOnly: { sku: string; name: string; stock: number }[];
+  /** SKUs in the CURRENT tab that have no row in Dankuni Total Stock — they can't be shown. */
+  missingFromCatalog: { sku: string; stock: number }[];
+}
+
 export interface StockDashboardSummary {
   asOfDate: string;
   warehouse: WarehouseScope;
   velocityWindow: VelocityWindow;
   products: ProductStockAnalytics[];
+  chennaiVerification: ChennaiVerification;
   categories: string[];
   brands: string[];
   totals: {

@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import { useMemo, useState } from 'react';
 
+import { ChennaiCheckBadge } from '@/dashboards/stock/components/ChennaiCheckBadge';
 import { MiniStockSparkline } from '@/dashboards/stock/components/StockTrajectoryChart';
 import {
   fmtCompact,
@@ -352,8 +353,8 @@ export default function OverviewView({
                 <span>
                   Dankuni Share:{' '}
                   <strong className="font-mono text-foreground">
-                    {kpis.totalCurrent > 0
-                      ? `${Math.round((kpis.totalDankuni / kpis.totalCurrent) * 100)}%`
+                    {kpis.totalDankuni + kpis.totalChennai > 0
+                      ? `${Math.round((kpis.totalDankuni / (kpis.totalDankuni + kpis.totalChennai)) * 100)}%`
                       : '0%'}
                   </strong>{' '}
                   ({fmtUnits(kpis.totalDankuni)} u)
@@ -361,8 +362,8 @@ export default function OverviewView({
                 <span>
                   Chennai Share:{' '}
                   <strong className="font-mono text-foreground">
-                    {kpis.totalCurrent > 0
-                      ? `${Math.round((kpis.totalChennai / kpis.totalCurrent) * 100)}%`
+                    {kpis.totalDankuni + kpis.totalChennai > 0
+                      ? `${Math.round((kpis.totalChennai / (kpis.totalDankuni + kpis.totalChennai)) * 100)}%`
                       : '0%'}
                   </strong>{' '}
                   ({fmtUnits(kpis.totalChennai)} u)
@@ -682,11 +683,17 @@ export default function OverviewView({
 
                       <TableCell className="text-right font-mono text-xs tabular-nums">
                         {p.chennaiStock > 0 ? (
-                          <span className="font-semibold text-sky-400">
+                          <span className="inline-flex items-center justify-end gap-1 font-semibold text-sky-400">
+                            <ChennaiCheckBadge product={p} />
                             {fmtUnits(p.chennaiStock)}
                           </span>
                         ) : (
                           <span className="text-muted-foreground">—</span>
+                        )}
+                        {(p.chennaiCheck === 'mismatch' || p.chennaiCheck === 'current-only') && (
+                          <div className="text-[10px] font-normal text-amber-400/80">
+                            Col G: {fmtUnits(p.chennaiStockSheetG)}
+                          </div>
                         )}
                       </TableCell>
 

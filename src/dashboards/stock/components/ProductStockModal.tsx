@@ -11,7 +11,9 @@ import {
 } from 'lucide-react';
 import { useState } from 'react';
 
+import { ChennaiCheckBadge } from '@/dashboards/stock/components/ChennaiCheckBadge';
 import { StockTrajectoryChart } from '@/dashboards/stock/components/StockTrajectoryChart';
+import { chennaiCheckTitle } from '@/dashboards/stock/data/chennaiCheck';
 import {
   fmtCompact,
   fmtShortDate,
@@ -377,9 +379,17 @@ export function ProductStockModal({
                       <span>
                         Dankuni: <strong className="text-foreground">{fmtUnits(shown.dankuniStock)}</strong>
                       </span>
-                      <span>
+                      <span className="inline-flex items-center gap-1" title={chennaiCheckTitle(shown)}>
                         Chennai:{' '}
                         <strong className="text-sky-400">{fmtUnits(shown.chennaiStock)}</strong>
+                        <ChennaiCheckBadge product={shown} className="size-3.5" />
+                        {(shown.chennaiCheck === 'mismatch' ||
+                          shown.chennaiCheck === 'current-only') && (
+                          <span className="text-[10px] text-amber-400">
+                            (CURRENT tab {fmtUnits(shown.chennaiStockCurrentTab ?? 0)} · Col G{' '}
+                            {fmtUnits(shown.chennaiStockSheetG)})
+                          </span>
+                        )}
                       </span>
                       {shown.oldLogoStock > 0 && (
                         <span>

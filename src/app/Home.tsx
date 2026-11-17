@@ -14,7 +14,10 @@ import { dashboards } from '@/app/registry';
 import { MARKETPLACES } from '@/dashboards/prices/data/types';
 import { usePriceData } from '@/dashboards/prices/hooks/usePriceData';
 import { fmtCompact, fmtShortDate, fmtUnits, fmtVelocity } from '@/dashboards/stock/data/format';
-import { buildStockDashboardSummary } from '@/dashboards/stock/data/parseStock';
+import {
+  buildStockDashboardSummary,
+  EMPTY_STOCK_PAYLOAD,
+} from '@/dashboards/stock/data/parseStock';
 import { useStockData } from '@/dashboards/stock/hooks/useStockData';
 import { cn } from '@/shared/lib/utils';
 
@@ -80,7 +83,8 @@ const SEVERITY_META: Record<
 };
 
 export function Home() {
-  const { payload: stockPayload } = useStockData();
+  // While stock data is loading, no stock actions are shown (never old numbers).
+  const stockPayload = useStockData().payload ?? EMPTY_STOCK_PAYLOAD;
   const { data: priceData } = usePriceData();
 
   const [severityFilter, setSeverityFilter] = useState<Severity | 'all'>('all');
@@ -88,6 +92,10 @@ export function Home() {
 
   const stockSummary = useMemo(
     () => buildStockDashboardSummary(stockPayload, { warehouse: 'all', velocityWindow: 30 }),
+    [stockPayload],
+  );
+  const chennaiSummary = useMemo(
+    () => buildStockDashboardSummary(stockPayload, { warehouse: 'chennai', velocityWindow: 30 }),
     [stockPayload],
   );
 
@@ -231,20 +239,30 @@ export function Home() {
       });
     }
 
-    // 5. MEDIUM: Chennai Warehouse Stock Coverage Gap
-    items.push({
-      id: 'stock-chennai-gap',
-      severity: 'medium',
-      weight: 48,
-      dashboardId: 'stock',
-      dashboardLabel: 'Warehouse Stock',
-      areaLabel: 'Chennai Warehouse',
-      title: 'Chennai Warehouse: 2 of 3 Tracked SKUs Have 0 Local Stock',
-      detail:
-        'IMEFTCNP600 has 37,428 units in Chennai, while IMEGHFT600 and IMEGHTT have 0 received stock in Chennai despite B2C orders.',
-      metricBadge: '2 SKUs at 0 in Chennai',
-      to: '/stock?warehouse=chennai',
-    });
+    // 5. MEDIUM: Chennai Warehouse Stock Coverage Gap (derived from live sheet data)
+    const chennaiLive = chennaiSummary.products.filter(
+      (p) => p.status === 'Bestseller' || p.status === 'Active',
+    );
+    const chennaiZero = chennaiLive.filter((p) => p.chennaiStock <= 0);
+    if (chennaiZero.length > 0) {
+      const stocked = chennaiLive.filter((p) => p.chennaiStock > 0);
+      items.push({
+        id: 'stock-chennai-gap',
+        severity: 'medium',
+        weight: 48,
+        dashboardId: 'stock',
+        dashboardLabel: 'Warehouse Stock',
+        areaLabel: 'Chennai Warehouse',
+        title: `Chennai Warehouse: ${chennaiZero.length} of ${chennaiLive.length} Tracked SKUs Have 0 Local Stock`,
+        detail: `${chennaiZero.map((p) => p.sku).join(', ')} at 0 units in Chennai${
+          stocked.length
+            ? ` · In stock: ${stocked.map((p) => `${p.sku} (${fmtUnits(p.chennaiStock)} u)`).join(', ')}`
+            : ''
+        }.`,
+        metricBadge: `${chennaiZero.length} SKU${chennaiZero.length > 1 ? 's' : ''} at 0 in Chennai`,
+        to: '/stock?warehouse=chennai',
+      });
+    }
 
     // 6. WATCH / ROUTINE: Sales, Dispatch & Billing Checks
     items.push(
@@ -295,7 +313,7 @@ export function Home() {
       if (rankDiff !== 0) return rankDiff;
       return b.weight - a.weight;
     });
-  }, [stockSummary, priceData]);
+  }, [stockSummary, chennaiSummary, priceData]);
 
   const counts = useMemo(() => {
     const out = { critical: 0, high: 0, medium: 0, watch: 0 };

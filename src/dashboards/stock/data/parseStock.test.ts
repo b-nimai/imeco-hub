@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { resolveHeaderDates } from './parseDate';
-import { buildStockDashboardSummary } from './parseStock';
+import { buildStockDashboardSummary, verifyChennaiStock } from './parseStock';
 import snapshot from './stockSnapshot.json';
 import type { StockRawPayload } from './types';
 
@@ -100,6 +100,92 @@ describe('buildStockDashboardSummary', () => {
       'IMEGHTT',
     ]);
     expect(chennaiSummary.totals.totalCurrentStock).toBe(37428);
+  });
+
+  it('includes renamed/new Chennai SKUs and uses Total Stock Col G as Chennai stock', () => {
+    const base = payload.catalog.find((c) => c.sku === 'IMEGHTTP6')!;
+    const live: StockRawPayload = {
+      ...payload,
+      catalog: payload.catalog.map((c) =>
+        c.sku === 'IMEFTCNP600'
+          ? { ...c, chennaiStock: 38448 }
+          : c.sku === 'IMEGHFT600'
+            ? { ...c, chennaiStock: 19440 }
+            : c.sku === 'IMEGHTTP6'
+              ? { ...base, chennaiStock: 17632 }
+              : c,
+      ),
+      chennaiInflows: {
+        IMEFTCNP600: { totalReceived: 38448, byDate: { '2026-11-01': 38448 } },
+        IMEGHFT600: { totalReceived: 19440, byDate: { '2026-11-12': 19440 } },
+        IMEGHTTP6: { totalReceived: 17632, byDate: { '2026-11-13': 17632 } },
+      },
+      // Sold rows that would make received - sold disagree with the sheet
+      chennaiOutflows: {
+        IMEFTCNP600: { byDate: {}, byChannel: { Blinkit: 500 } },
+      },
+    } as StockRawPayload;
+
+    const summary = buildStockDashboardSummary(live, {
+      warehouse: 'chennai',
+      velocityWindow: 30,
+      asOfDate: '2026-11-16',
+    });
+    const bySku = Object.fromEntries(summary.products.map((p) => [p.sku, p.chennaiStock]));
+    expect(bySku).toEqual({ IMEFTCNP600: 38448, IMEGHFT600: 19440, IMEGHTTP6: 17632 });
+    expect(summary.totals.totalCurrentStock).toBe(38448 + 19440 + 17632);
+  });
+
+  it('prefers the Chennai CURRENT tab over Total Stock Col G when the proxy provides it', () => {
+    const live = {
+      ...payload,
+      chennaiCurrent: { IMEFTCNP600: 40000, IMEGHTTP6: 17632 },
+    } as StockRawPayload;
+    const summary = buildStockDashboardSummary(live, {
+      warehouse: 'chennai',
+      velocityWindow: 30,
+      asOfDate: '2026-11-16',
+    });
+    const bySku = Object.fromEntries(summary.products.map((p) => [p.sku, p.chennaiStock]));
+    expect(bySku.IMEFTCNP600).toBe(40000);
+    expect(bySku.IMEGHTTP6).toBe(17632);
+  });
+
+  it('cross-checks Chennai stock between Total Stock Col G and the Chennai CURRENT tab', () => {
+    const live = {
+      ...payload,
+      catalog: payload.catalog.map((c) =>
+        c.sku === 'IMEGHFT600' ? { ...c, chennaiStock: 19440 } : c,
+      ),
+      chennaiCurrent: {
+        IMEFTCNP600: 37428, // matches Col G -> verified
+        IMEGHFT600: 19000, // Col G says 19440 -> mismatch
+        IMEGHTTP6: 17632, // Col G says 0 -> mismatch (Col G not updated)
+        'NEW-SKU': 50, // not in Total Stock -> missing from catalog
+      },
+    } as StockRawPayload;
+
+    const v = verifyChennaiStock(live);
+    expect(v.currentTabAvailable).toBe(true);
+    expect(v.verifiedCount).toBe(1);
+    expect(v.mismatches.map((m) => [m.sku, m.currentTab, m.sheetG])).toEqual([
+      ['IMEGHFT600', 19000, 19440],
+      ['IMEGHTTP6', 17632, 0],
+    ]);
+    expect(v.missingFromCatalog).toEqual([{ sku: 'NEW-SKU', stock: 50 }]);
+
+    const summary = buildStockDashboardSummary(live, { warehouse: 'chennai', asOfDate: '2026-11-16' });
+    const ft = summary.products.find((p) => p.sku === 'IMEGHFT600')!;
+    expect(ft.chennaiCheck).toBe('mismatch');
+    expect(ft.chennaiStock).toBe(19000);
+    expect(ft.chennaiStockSheetG).toBe(19440);
+    expect(summary.products.find((p) => p.sku === 'IMEFTCNP600')!.chennaiCheck).toBe('verified');
+  });
+
+  it('marks Chennai stock as not cross-checked when the proxy has no CURRENT tab', () => {
+    const v = verifyChennaiStock(payload);
+    expect(v.currentTabAvailable).toBe(false);
+    expect(v.mismatches).toHaveLength(0);
   });
 
   it('reconciles 100% of all 162 catalog items against raw sheet stock and sold totals', () => {

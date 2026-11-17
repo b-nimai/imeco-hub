@@ -1,6 +1,8 @@
 import { addDaysIso, diffDaysIso } from './parseDate';
 import type {
   ChannelBreakdown,
+  ChennaiCheck,
+  ChennaiVerification,
   DailyStockPoint,
   ProductStatus,
   ProductStockAnalytics,
@@ -12,7 +14,65 @@ import type {
   WarehouseScope,
 } from './types';
 
-const CHENNAI_SKUS = new Set(['IMEFTCNP600', 'IMEGHFT600', 'IMEGHTT']);
+/** Empty payload for rendering before data arrives (keeps hooks unconditional). */
+export const EMPTY_STOCK_PAYLOAD: StockRawPayload = {
+  generatedAt: '',
+  catalog: [],
+  rollups: {},
+  dankuniInflows: {},
+  dankuniOutflows: {},
+  chennaiInflows: {},
+  chennaiOutflows: {},
+};
+
+function classifyChennai(sheetG: number, currentTab: number | undefined, tabAvailable: boolean): ChennaiCheck {
+  if (!tabAvailable) return sheetG > 0 ? 'sheetg-only' : 'none';
+  if (currentTab === undefined) return sheetG > 0 ? 'sheetg-only' : 'none';
+  if (currentTab === sheetG) return currentTab > 0 ? 'verified' : 'none';
+  return sheetG === 0 && currentTab > 0 ? 'current-only' : 'mismatch';
+}
+
+/**
+ * Cross-check Chennai stock between the two sheets:
+ *   Dankuni workbook → Total Stock → Col G   vs   Chennai workbook → CURRENT tab.
+ * Runs over the whole catalog (independent of warehouse scope / status filters).
+ */
+export function verifyChennaiStock(payload: StockRawPayload): ChennaiVerification {
+  const current = payload.chennaiCurrent;
+  const tabAvailable = Boolean(current);
+  const result: ChennaiVerification = {
+    currentTabAvailable: tabAvailable,
+    verifiedCount: 0,
+    mismatches: [],
+    sheetGOnly: [],
+    missingFromCatalog: [],
+  };
+  const catalogSkus = new Set<string>();
+  for (const item of payload.catalog) {
+    if (item.id.endsWith('-REC')) continue;
+    catalogSkus.add(item.sku);
+    const cur = current?.[item.sku];
+    const name = cleanProductName(item.name);
+    switch (classifyChennai(item.chennaiStock, cur, tabAvailable)) {
+      case 'verified':
+        result.verifiedCount++;
+        break;
+      case 'mismatch':
+      case 'current-only':
+        result.mismatches.push({ sku: item.sku, name, sheetG: item.chennaiStock, currentTab: cur ?? 0 });
+        break;
+      case 'sheetg-only':
+        if (tabAvailable) result.sheetGOnly.push({ sku: item.sku, name, stock: item.chennaiStock });
+        break;
+    }
+  }
+  if (current) {
+    for (const [sku, stock] of Object.entries(current)) {
+      if (!catalogSkus.has(sku)) result.missingFromCatalog.push({ sku, stock });
+    }
+  }
+  return result;
+}
 
 function normaliseStatus(raw: string): ProductStatus {
   const s = raw.trim().toLowerCase();
@@ -77,8 +137,13 @@ export function buildStockDashboardSummary(
 
     const chIn = payload.chennaiInflows[lookupSku];
     const chOut = payload.chennaiOutflows[lookupSku];
+    // A product belongs to Chennai if the Chennai CURRENT tab or Total Stock Col G lists it, or the
+    // Chennai workbook has a received/sold row for its SKU. Derived from data (no hardcoded SKU list)
+    // so renamed/new SKUs appear automatically.
+    const chCurrent = isRecoveredDuplicate ? undefined : payload.chennaiCurrent?.[item.sku];
     const hasChennaiPresence =
-      CHENNAI_SKUS.has(item.sku) && !isRecoveredDuplicate && Boolean(chIn || chOut || item.chennaiStock > 0);
+      !isRecoveredDuplicate &&
+      Boolean(chIn || chOut || chCurrent !== undefined || item.chennaiStock > 0);
 
     if (warehouse === 'chennai' && !hasChennaiPresence) {
       continue;
@@ -88,15 +153,18 @@ export function buildStockDashboardSummary(
     const dkOut = isRecoveredDuplicate ? undefined : payload.dankuniOutflows[item.sku];
     const rollup = isRecoveredDuplicate ? undefined : payload.rollups[item.sku];
 
-    // Compute accurate Chennai stock directly from inflows - outflows if present
     const chReceivedTotal = chIn?.totalReceived ?? 0;
-    const chSoldTotal = chOut
-      ? Object.values(chOut.byChannel).reduce((a, b) => a + b, 0)
-      : 0;
-    const computedChennaiStock = Math.max(0, chReceivedTotal - chSoldTotal);
-    const chennaiStock = hasChennaiPresence
-      ? Math.max(item.chennaiStock, computedChennaiStock)
-      : item.chennaiStock;
+    const chSoldTotal = chOut ? Object.values(chOut.byChannel).reduce((a, b) => a + b, 0) : 0;
+    // Chennai stock comes straight from the sheets so the dashboard always matches them:
+    // the Chennai workbook's CURRENT tab when available, else Total Stock Col G (Dankuni workbook).
+    // Received - sold is NOT used: it overstates stock whenever damage, corrections or unlogged
+    // sales exist.
+    // When both sources exist and disagree, the CURRENT tab (the Chennai warehouse's own count)
+    // wins and the row is flagged so the sheets can be fixed.
+    const chennaiStock = chCurrent ?? item.chennaiStock;
+    const chennaiCheck = isRecoveredDuplicate
+      ? 'none'
+      : classifyChennai(item.chennaiStock, chCurrent, Boolean(payload.chennaiCurrent));
 
     const dankuniStock = item.dankuniNewLogoStock;
     const oldLogoStock = item.oldLogoStock;
@@ -410,6 +478,9 @@ export function buildStockDashboardSummary(
       packagingBoxName: item.packagingBoxName,
       dankuniStock,
       chennaiStock,
+      chennaiCheck,
+      chennaiStockSheetG: isRecoveredDuplicate ? 0 : item.chennaiStock,
+      chennaiStockCurrentTab: chCurrent ?? null,
       oldLogoStock,
       upcomingStock,
       currentStock,
@@ -475,6 +546,7 @@ export function buildStockDashboardSummary(
     warehouse,
     velocityWindow,
     products,
+    chennaiVerification: verifyChennaiStock(payload),
     categories: [...categorySet].sort(),
     brands: [...brandSet].sort(),
     totals,

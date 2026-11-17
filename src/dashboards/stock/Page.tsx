@@ -1,10 +1,13 @@
-import { Info, RefreshCw } from 'lucide-react';
+import { AlertTriangle, CircleCheck, Info, RefreshCw } from 'lucide-react';
 import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router';
 
 import { ProductStockModal } from '@/dashboards/stock/components/ProductStockModal';
-import { fmtSyncTime } from '@/dashboards/stock/data/format';
-import { buildStockDashboardSummary } from '@/dashboards/stock/data/parseStock';
+import { fmtSyncTime, fmtUnits } from '@/dashboards/stock/data/format';
+import {
+  buildStockDashboardSummary,
+  EMPTY_STOCK_PAYLOAD,
+} from '@/dashboards/stock/data/parseStock';
 import type {
   ProductStatus,
   VelocityWindow,
@@ -50,7 +53,11 @@ const ALLOWED_STATUSES: Record<StatusScope, Set<ProductStatus>> = {
 };
 
 export default function StockPage() {
-  const { payload, fetchedAt, syncing, error, isLiveConfigured, refresh } = useStockData();
+  const { payload, source, fetchedAt, syncing, loading, error, isLiveConfigured, refresh } =
+    useStockData();
+  // Live sync failed but recent (≤2h) last-fetched data is on screen.
+  const isFallback = Boolean(error && payload);
+  const isLastSaved = source === 'last-saved';
   const { page: tab, select: setTab } = useSubPage(TABS, 'overview');
 
   const [searchParams] = useSearchParams();
@@ -71,7 +78,7 @@ export default function StockPage() {
 
   const summary = useMemo(
     () =>
-      buildStockDashboardSummary(payload, {
+      buildStockDashboardSummary(payload ?? EMPTY_STOCK_PAYLOAD, {
         warehouse,
         velocityWindow,
       }),
@@ -205,31 +212,49 @@ export default function StockPage() {
             onClick={() => setShowSetupModal(true)}
             className={cn(
               'inline-flex h-8 items-center gap-1.5 rounded-lg border px-2.5 text-xs transition-colors',
-              error
-                ? 'border-rose-500/40 bg-rose-500/10 text-rose-300'
-                : isLiveConfigured
-                  ? 'border-emerald-500/35 bg-emerald-500/10 text-emerald-300'
-                  : 'border-border bg-card text-muted-foreground hover:text-foreground',
+              isLastSaved
+                ? 'border-amber-500/40 bg-amber-500/10 text-amber-300'
+                : error
+                  ? 'border-rose-500/40 bg-rose-500/10 text-rose-300'
+                  : isLiveConfigured
+                    ? 'border-emerald-500/35 bg-emerald-500/10 text-emerald-300'
+                    : 'border-border bg-card text-muted-foreground hover:text-foreground',
             )}
             title={
-              fetchedAt
-                ? `Last synced: ${new Date(fetchedAt).toLocaleString('en-IN')} · Auto-refreshes every 30m`
-                : 'Click for Google Apps Script proxy connection details'
+              isLastSaved
+                ? `Live sync failed — showing the last fetched data (${new Date(fetchedAt ?? 0).toLocaleString('en-IN')}). Click ↻ to retry.`
+                : error && payload
+                  ? `Latest sync failed (${error}). Showing data synced ${new Date(fetchedAt ?? 0).toLocaleString('en-IN')}. Click ↻ to retry.`
+                  : fetchedAt
+                    ? `Last synced: ${new Date(fetchedAt).toLocaleString('en-IN')} · Auto-refreshes every 5m`
+                    : 'Click for Google Apps Script proxy connection details'
             }
           >
             <span
               className={cn(
                 'size-2 rounded-full',
                 syncing && 'animate-pulse',
-                error ? 'bg-rose-400' : isLiveConfigured ? 'bg-emerald-400' : 'bg-sky-400',
+                isLastSaved
+                  ? 'bg-amber-400'
+                  : error
+                    ? 'bg-rose-400'
+                    : isLiveConfigured
+                      ? 'bg-emerald-400'
+                      : 'bg-sky-400',
               )}
             />
             <span className="font-mono text-[11px] tabular-nums">
-              {syncing
-                ? 'Syncing…'
-                : error
-                  ? `Cached · ${fmtSyncTime(fetchedAt, nowMs)}`
-                  : `Synced ${fmtSyncTime(fetchedAt, nowMs)}`}
+              {loading
+                ? 'Loading…'
+                : syncing
+                  ? 'Syncing…'
+                  : isLastSaved
+                    ? `Last fetched · ${fmtSyncTime(fetchedAt, nowMs)}`
+                    : error
+                      ? payload
+                        ? `Sync failed · ${fmtSyncTime(fetchedAt, nowMs)}`
+                        : 'Sync failed'
+                      : `Synced ${fmtSyncTime(fetchedAt, nowMs)}`}
             </span>
             <Info className="size-3.5 opacity-70" />
           </button>
@@ -251,24 +276,132 @@ export default function StockPage() {
         </div>
       </div>
 
-      {/* ── Active Sub-Page View ── */}
-      <div key={tab} className="animate-fade-in-up min-w-0 flex-1">
-        <Suspense fallback={<Skeleton className="h-96 rounded-xl" />}>
-          {tab === 'overview' && (
-            <OverviewView
-              products={visibleProducts}
-              onSelectProduct={setSelectedId}
-              onNavigate={setTab}
-            />
+      {!payload ? (
+        loading || !error ? (
+          /* ── Loading: never show old numbers while fresh sheet data is on its way ── */
+          <div className="flex flex-col gap-3" aria-busy="true" aria-live="polite">
+            <div className="inline-flex items-center gap-2 text-xs text-muted-foreground">
+              <RefreshCw className="size-3.5 animate-spin" />
+              Loading the latest stock from the Dankuni &amp; Chennai sheets…
+            </div>
+            <div className="grid grid-cols-2 gap-2.5 md:grid-cols-3 2xl:grid-cols-6">
+              {Array.from({ length: 6 }, (_, i) => (
+                <Skeleton key={i} className="h-24 rounded-xl" />
+              ))}
+            </div>
+            <Skeleton className="h-56 rounded-xl" />
+            <Skeleton className="h-96 rounded-xl" />
+          </div>
+        ) : (
+          /* ── Fetch failed and nothing loaded ── */
+          <div className="mx-auto mt-10 flex max-w-md flex-col items-center gap-3 rounded-xl border border-rose-500/40 bg-rose-500/5 p-6 text-center">
+            <AlertTriangle className="size-6 text-rose-400" />
+            <div className="text-sm font-semibold text-foreground">Couldn't load stock data</div>
+            <p className="text-xs text-muted-foreground">
+              The Google Sheets connection failed ({error}) and there is no data from the last 2
+              hours to fall back on. Older data is hidden so it can't be mistaken for current stock.
+            </p>
+            <div className="flex flex-wrap justify-center gap-2">
+              <button
+                type="button"
+                onClick={refresh}
+                className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-primary px-3 text-xs font-medium text-primary-foreground"
+              >
+                <RefreshCw className="size-3.5" />
+                Retry
+              </button>
+            </div>
+          </div>
+        )
+      ) : (
+        <>
+          {isFallback && (
+            <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-amber-500/40 bg-amber-500/10 px-3.5 py-2 text-xs text-amber-200">
+              <span className="inline-flex items-center gap-1.5">
+                <AlertTriangle className="size-4 text-amber-400" />
+                Live sync failed — showing the last fetched data from{' '}
+                {new Date(fetchedAt ?? 0).toLocaleString('en-IN')} ({fmtSyncTime(fetchedAt, nowMs)}
+                ). Recent changes in the sheet may be missing.
+              </span>
+              <button
+                type="button"
+                onClick={refresh}
+                className="inline-flex h-7 items-center gap-1.5 rounded-md border border-amber-500/40 px-2.5 font-medium hover:bg-amber-500/10"
+              >
+                <RefreshCw className="size-3.5" />
+                Retry
+              </button>
+            </div>
           )}
-          {tab === 'projections' && (
-            <ProjectionsView products={visibleProducts} onSelectProduct={setSelectedId} />
-          )}
-          {tab === 'stockouts' && (
-            <StockoutsView products={visibleProducts} onSelectProduct={setSelectedId} />
-          )}
-        </Suspense>
-      </div>
+
+          {/* ── Chennai stock cross-check: Dankuni Total Stock Col G vs Chennai CURRENT tab ── */}
+          {warehouse !== 'dankuni' &&
+            summary.chennaiVerification.currentTabAvailable &&
+            (() => {
+              const v = summary.chennaiVerification;
+              const issues =
+                v.mismatches.length + v.missingFromCatalog.length + v.sheetGOnly.length;
+              if (issues === 0) {
+                return (
+                  <div className="inline-flex items-center gap-1.5 self-start rounded-lg border border-emerald-500/30 bg-emerald-500/5 px-2.5 py-1 text-[11px] text-emerald-300">
+                    <CircleCheck className="size-3.5" />
+                    Chennai stock verified · {v.verifiedCount} SKU{v.verifiedCount === 1 ? '' : 's'}{' '}
+                    match in both Dankuni Total Stock (Col G) and the Chennai CURRENT tab
+                  </div>
+                );
+              }
+              return (
+                <div className="rounded-xl border border-amber-500/40 bg-amber-500/10 px-3.5 py-2.5 text-xs text-amber-200">
+                  <div className="flex items-center gap-1.5 font-semibold">
+                    <AlertTriangle className="size-4 text-amber-400" />
+                    Chennai stock doesn't match between the two sheets ({issues} issue
+                    {issues === 1 ? '' : 's'}) · {v.verifiedCount} verified
+                  </div>
+                  <ul className="mt-1.5 space-y-0.5 pl-5 font-mono text-[11px] text-amber-100/90">
+                    {v.mismatches.map((m) => (
+                      <li key={m.sku}>
+                        {m.sku}: CURRENT tab {fmtUnits(m.currentTab)} ≠ Col G {fmtUnits(m.sheetG)}{' '}
+                        <span className="text-amber-300/70">(showing CURRENT tab)</span>
+                      </li>
+                    ))}
+                    {v.missingFromCatalog.map((m) => (
+                      <li key={m.sku}>
+                        {m.sku}: {fmtUnits(m.stock)} in the Chennai CURRENT tab but no row in
+                        Dankuni Total Stock{' '}
+                        <span className="text-amber-300/70">(not shown, add it)</span>
+                      </li>
+                    ))}
+                    {v.sheetGOnly.map((m) => (
+                      <li key={m.sku}>
+                        {m.sku}: {fmtUnits(m.stock)} in Col G but missing from the Chennai CURRENT
+                        tab
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              );
+            })()}
+
+          {/* ── Active Sub-Page View ── */}
+          <div key={tab} className="animate-fade-in-up min-w-0 flex-1">
+            <Suspense fallback={<Skeleton className="h-96 rounded-xl" />}>
+              {tab === 'overview' && (
+                <OverviewView
+                  products={visibleProducts}
+                  onSelectProduct={setSelectedId}
+                  onNavigate={setTab}
+                />
+              )}
+              {tab === 'projections' && (
+                <ProjectionsView products={visibleProducts} onSelectProduct={setSelectedId} />
+              )}
+              {tab === 'stockouts' && (
+                <StockoutsView products={visibleProducts} onSelectProduct={setSelectedId} />
+              )}
+            </Suspense>
+          </div>
+        </>
+      )}
 
       {/* ── Product Deep-Dive Right-Side Slide-Over Drawer ── */}
       <ProductStockModal
