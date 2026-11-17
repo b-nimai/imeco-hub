@@ -277,13 +277,18 @@ function buildPayload() {
     };
   }
 
-  // Template for padding short header rows: the sales tab with the widest header row.
-  var templateHeaders = [];
-  Object.keys(dkRoles).forEach(function (t) {
-    if (dkRoles[t] !== 'sales') return;
-    var h = (dankuni[t] || [])[1] || [];
-    if (h.length > templateHeaders.length) templateHeaders = h;
-  });
+  // Template for padding short header rows. Flipkart's header row is the reference date layout
+  // the other sales tabs follow (keep it — other tabs lay dates out differently). Falls back to the
+  // widest sales header only if a Flipkart tab no longer exists.
+  var DK_TEMPLATE = findTab(dankuni, 'Flipkart');
+  var templateHeaders = DK_TEMPLATE ? (dankuni[DK_TEMPLATE] || [])[1] || [] : [];
+  if (!DK_TEMPLATE) {
+    Object.keys(dkRoles).forEach(function (t) {
+      if (dkRoles[t] !== 'sales') return;
+      var h = (dankuni[t] || [])[1] || [];
+      if (h.length > templateHeaders.length) templateHeaders = h;
+    });
+  }
   var dankuniOutflows = {};
   Object.keys(dankuni).forEach(function (tab) {
     if (dkRoles[tab] !== 'sales') return;
