@@ -3,6 +3,7 @@ import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router';
 
 import { ProductStockModal } from '@/dashboards/stock/components/ProductStockModal';
+import { StockLoader } from '@/dashboards/stock/components/StockLoader';
 import { fmtSyncTime, fmtUnits } from '@/dashboards/stock/data/format';
 import {
   buildStockDashboardSummary,
@@ -279,19 +280,7 @@ export default function StockPage() {
       {!payload ? (
         loading || !error ? (
           /* ── Loading: never show old numbers while fresh sheet data is on its way ── */
-          <div className="flex flex-col gap-3" aria-busy="true" aria-live="polite">
-            <div className="inline-flex items-center gap-2 text-xs text-muted-foreground">
-              <RefreshCw className="size-3.5 animate-spin" />
-              Loading the latest stock from the Dankuni &amp; Chennai sheets…
-            </div>
-            <div className="grid grid-cols-2 gap-2.5 md:grid-cols-3 2xl:grid-cols-6">
-              {Array.from({ length: 6 }, (_, i) => (
-                <Skeleton key={i} className="h-24 rounded-xl" />
-              ))}
-            </div>
-            <Skeleton className="h-56 rounded-xl" />
-            <Skeleton className="h-96 rounded-xl" />
-          </div>
+          <StockLoader />
         ) : (
           /* ── Fetch failed and nothing loaded ── */
           <div className="mx-auto mt-10 flex max-w-md flex-col items-center gap-3 rounded-xl border border-rose-500/40 bg-rose-500/5 p-6 text-center">
