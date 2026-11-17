@@ -1,22 +1,32 @@
 /**
  * IMECO Mission Control — Stock Sheets Proxy (Google Apps Script)
  *
- * Reads the private Dankuni & Chennai stock workbooks using your Google account's
- * Viewer access and returns the compact StockRawPayload JSON to imeco-hub.
+ * Reads the private Dankuni & Chennai stock workbooks (Viewer access is enough), builds the
+ * compact StockRawPayload JSON, and publishes it so the dashboard loads in about a second:
  *
- * SETUP (2 minutes, zero changes required from the sheet maintainer):
- *   1. Open https://script.google.com while signed in as the Google account that has
- *      Viewer access to both sheets (e.g. nimaibarman4978@gmail.com).
- *   2. Click "New project", name it "IMECO Stock Proxy", and paste this entire file
- *      into `Code.gs`.
- *   3. Click "Deploy" -> "New deployment":
- *        - Select type: "Web app"
- *        - Execute as: "Me"
- *        - Who has access: "Anyone"
- *   4. Authorize the script when prompted, then copy the "Web app URL"
- *      (looks like `https://script.google.com/macros/s/AKfycb.../exec`).
- *   5. Set `VITE_STOCK_APPS_SCRIPT_URL="<your Web app URL>"` in `imeco-hub/.env`
- *      and in your Vercel project environment variables.
+ *   ┌ every 5 min (time trigger) ┐
+ *   │ scheduledTick: sheets changed? budget ok? → build → CacheService + Supabase │
+ *   └──────────────────────────────┘
+ *   doGet (web app)            → serves the cached build instantly (builds only on a cache miss)
+ *   doGet ?action=status       → build/budget state (JSON)
+ *   doGet ?action=build        → force a rebuild now (rate-limited, 1/min)
+ *   doGet ?engine=legacy       → build with the old SpreadsheetApp reader (for comparison)
+ *
+ * QUOTAS (free Gmail): time triggers may run ~90 min/day in total, 6 min per run. The script
+ * tracks its own trigger runtime per day and paces rebuilds to stay inside DAILY_BUDGET_MIN
+ * (default 75, set the DAILY_BUDGET_MIN script property to ~330 on a Google Workspace account).
+ * Web-app requests (doGet) do not count toward that trigger budget.
+ *
+ * ONE-TIME SETUP (in the Apps Script editor):
+ *   1. Services (+) → add "Google Sheets API" and "Drive API". (Fast reads + change detection;
+ *      the script still works without them, just slower.)
+ *   2. Project Settings → Script Properties → add:
+ *        SUPABASE_URL         https://<project-ref>.supabase.co
+ *        SUPABASE_KEY         the project's anon / publishable key (public, read-only by RLS)
+ *        STOCK_INGEST_SECRET  value printed by the last query in scripts/stock-supabase.sql
+ *   3. Select the `setup` function in the toolbar and click Run (installs the 5-min trigger and
+ *      does the first build).
+ *   4. Deploy → Manage deployments → Edit → Version: New version → Deploy (keeps the same URL).
  */
 
 const DANKUNI_SPREADSHEET_ID = '1ep2kwz9Q_uxyEHBmwCSwwnbpZ3BBomMJMGysK1-ph2g';
@@ -179,20 +189,86 @@ function isSalesTab(rows, firstCol) {
   return false;
 }
 
-function buildPayload() {
-  var dankuniBook = SpreadsheetApp.openById(DANKUNI_SPREADSHEET_ID);
-  var chennaiBook = SpreadsheetApp.openById(CHENNAI_SPREADSHEET_ID);
+// ── Readers ─────────────────────────────────────────────────────────────────────────────────
+// Fast: one Sheets API batchGet per workbook (instead of one SpreadsheetApp call per tab), and the
+// API trims trailing empty rows/columns. Legacy: the original SpreadsheetApp reader, kept as an
+// automatic fallback and for side-by-side comparison (?engine=legacy).
 
-  var dankuni = {};
-  dankuniBook.getSheets().forEach(function (s) {
-    dankuni[s.getName()] = s.getDataRange().getValues();
+/** Sheets serial day number → local-midnight Date (same calendar day getValues() would give). */
+function serialToDate(n) {
+  var u = new Date(Date.UTC(1899, 11, 30) + Math.floor(n) * 86400000);
+  return new Date(u.getUTCFullYear(), u.getUTCMonth(), u.getUTCDate());
+}
+
+/**
+ * With SERIAL_NUMBER rendering, date cells come back as numbers. Header rows (1 and 2) are where
+ * dates matter, so serials in a plausible range (2020–2035) are turned back into Dates there.
+ * Data cells stay numeric exactly as getValues() returns them.
+ */
+function reviveHeaderDates(rows) {
+  for (var r = 0; r < Math.min(2, rows.length); r++) {
+    var row = rows[r] || [];
+    for (var c = 0; c < row.length; c++) {
+      var v = row[c];
+      if (typeof v === 'number' && v >= 43831 && v <= 49674) row[c] = serialToDate(v);
+    }
+  }
+  return rows;
+}
+
+function readBookFast(spreadsheetId) {
+  var meta = Sheets.Spreadsheets.get(spreadsheetId, { fields: 'sheets.properties.title' });
+  var titles = (meta.sheets || []).map(function (s) { return s.properties.title; });
+  var ranges = titles.map(function (t) { return "'" + t.replace(/'/g, "''") + "'"; });
+  var res = Sheets.Spreadsheets.Values.batchGet(spreadsheetId, {
+    ranges: ranges,
+    majorDimension: 'ROWS',
+    valueRenderOption: 'UNFORMATTED_VALUE',
+    dateTimeRenderOption: 'SERIAL_NUMBER',
   });
-
-  var chennai = {};
-  chennaiBook.getSheets().forEach(function (s) {
-    chennai[s.getName()] = s.getDataRange().getValues();
+  var book = {};
+  (res.valueRanges || []).forEach(function (vr, i) {
+    book[titles[i]] = reviveHeaderDates(vr.values || []);
   });
+  return book;
+}
 
+function readBookLegacy(spreadsheetId) {
+  var book = {};
+  SpreadsheetApp.openById(spreadsheetId).getSheets().forEach(function (s) {
+    book[s.getName()] = s.getDataRange().getValues();
+  });
+  return book;
+}
+
+function fastReaderAvailable() {
+  return typeof Sheets !== 'undefined' && Sheets.Spreadsheets && Sheets.Spreadsheets.Values;
+}
+
+/** Read both workbooks and build the payload. engine: 'fast' (default) | 'legacy'. */
+function buildPayload(engine) {
+  var useFast = engine !== 'legacy' && fastReaderAvailable();
+  var t0 = Date.now();
+  var dankuni, chennai, used = useFast ? 'fast' : 'legacy';
+  try {
+    dankuni = useFast ? readBookFast(DANKUNI_SPREADSHEET_ID) : readBookLegacy(DANKUNI_SPREADSHEET_ID);
+  } catch (err) {
+    if (!useFast) throw err;
+    used = 'legacy (fast failed: ' + String(err).slice(0, 120) + ')';
+    dankuni = readBookLegacy(DANKUNI_SPREADSHEET_ID);
+    useFast = false;
+  }
+  var t1 = Date.now();
+  chennai = useFast ? readBookFast(CHENNAI_SPREADSHEET_ID) : readBookLegacy(CHENNAI_SPREADSHEET_ID);
+  var t2 = Date.now();
+  var payload = buildPayloadFromBooks(dankuni, chennai);
+  var t3 = Date.now();
+  payload.meta.engine = used;
+  payload.meta.timings = { readDankuniMs: t1 - t0, readChennaiMs: t2 - t1, parseMs: t3 - t2, totalMs: t3 - t0 };
+  return payload;
+}
+
+function buildPayloadFromBooks(dankuni, chennai) {
   // Structural input tabs (looked up by name, tolerant of case/spacing).
   var DK_TOTAL = findTab(dankuni, 'Total Stock');
   var DK_RECEIVED = findTab(dankuni, 'Stock Received');
@@ -445,9 +521,359 @@ function buildPayload() {
   };
 }
 
-function doGet() {
-  var payload = buildPayload();
-  return ContentService
-    .createTextOutput(JSON.stringify(payload))
-    .setMimeType(ContentService.MimeType.JSON);
+
+// ════════════════════════════════════════════════════════════════════════════════════════════
+// Background build pipeline
+// ════════════════════════════════════════════════════════════════════════════════════════════
+
+var TICK_MINUTES = 5; // trigger cadence (Apps Script allows 1, 5, 10, 15 or 30)
+var MIN_BUILD_GAP_SEC = 5 * 60; // never rebuild more often than this from the trigger
+var MAX_DATA_AGE_SEC = 2 * 60 * 60; // rebuild at least this often even if nothing changed
+var FORCE_BUILD_COOLDOWN_SEC = 60; // ?action=build rate limit
+var CHECK_COST_SEC = 3; // reserve per tick for the change check + Supabase heartbeat
+var DEFAULT_BUILD_SEC = 90; // assumed build time until the first build is measured
+var CACHE_TTL_SEC = 6 * 60 * 60; // CacheService maximum
+var CACHE_CHUNK = 90000; // CacheService values must be < 100 KB
+var QUOTA_TZ = 'America/Los_Angeles'; // Apps Script daily quotas roll over on Pacific time
+
+function prop(name, fallback) {
+  var v = PropertiesService.getScriptProperties().getProperty(name);
+  return v == null || v === '' ? fallback : v;
+}
+
+function dailyBudgetSec() {
+  return Number(prop('DAILY_BUDGET_MIN', '75')) * 60;
+}
+
+// ── persisted state (one JSON script property) ──────────────────────────────────────────────
+
+function loadState() {
+  try {
+    return JSON.parse(prop('STOCK_STATE', '{}'));
+  } catch (e) {
+    return {};
+  }
+}
+
+function saveState(state) {
+  PropertiesService.getScriptProperties().setProperty('STOCK_STATE', JSON.stringify(state));
+}
+
+function quotaDay(date) {
+  return Utilities.formatDate(date || new Date(), QUOTA_TZ, 'yyyy-MM-dd');
+}
+
+/** Seconds until the quota day rolls over (midnight Pacific). */
+function secondsLeftInQuotaDay() {
+  var now = new Date();
+  var h = Number(Utilities.formatDate(now, QUOTA_TZ, 'H'));
+  var m = Number(Utilities.formatDate(now, QUOTA_TZ, 'm'));
+  var sec = Number(Utilities.formatDate(now, QUOTA_TZ, 's'));
+  return Math.max(60, 86400 - (h * 3600 + m * 60 + sec));
+}
+
+/** Add this trigger run's seconds to today's usage. */
+function recordTriggerRuntime(state, seconds) {
+  var day = quotaDay();
+  if (state.usageDay !== day) {
+    state.usageDay = day;
+    state.usedSec = 0;
+    state.buildsToday = 0;
+  }
+  state.usedSec = Math.round(((state.usedSec || 0) + seconds) * 10) / 10;
+}
+
+// ── change detection ────────────────────────────────────────────────────────────────────────
+
+/** Latest modified time (ms) across both workbooks, or null if the Drive API isn't enabled. */
+function sourceModifiedMs() {
+  if (typeof Drive === 'undefined' || !Drive.Files) return null;
+  var latest = 0;
+  [DANKUNI_SPREADSHEET_ID, CHENNAI_SPREADSHEET_ID].forEach(function (id) {
+    var f;
+    try {
+      f = Drive.Files.get(id, { fields: 'modifiedTime', supportsAllDrives: true }); // Drive v3
+    } catch (e) {
+      f = Drive.Files.get(id, { supportsAllDrives: true }); // Drive v2
+    }
+    var t = Date.parse(f.modifiedTime || f.modifiedDate || '');
+    if (t > latest) latest = t;
+  });
+  return latest || null;
+}
+
+// ── storage: CacheService (instant doGet) ───────────────────────────────────────────────────
+
+function cachePut(payload) {
+  var blob = Utilities.gzip(Utilities.newBlob(JSON.stringify(payload), 'application/json'));
+  var b64 = Utilities.base64Encode(blob.getBytes());
+  var cache = CacheService.getScriptCache();
+  var parts = {};
+  var n = Math.ceil(b64.length / CACHE_CHUNK);
+  for (var i = 0; i < n; i++) parts['stock:p:' + i] = b64.slice(i * CACHE_CHUNK, (i + 1) * CACHE_CHUNK);
+  parts['stock:p:n'] = String(n);
+  cache.putAll(parts, CACHE_TTL_SEC);
+}
+
+function cacheGet() {
+  var cache = CacheService.getScriptCache();
+  var n = Number(cache.get('stock:p:n'));
+  if (!n) return null;
+  var keys = [];
+  for (var i = 0; i < n; i++) keys.push('stock:p:' + i);
+  var got = cache.getAll(keys);
+  var b64 = '';
+  for (var k = 0; k < n; k++) {
+    if (got[keys[k]] == null) return null;
+    b64 += got[keys[k]];
+  }
+  var bytes = Utilities.base64Decode(b64);
+  var json = Utilities.ungzip(Utilities.newBlob(bytes, 'application/x-gzip')).getDataAsString();
+  return JSON.parse(json);
+}
+
+// ── storage: Supabase (dashboard reads from here) ───────────────────────────────────────────
+
+function supabaseConfigured() {
+  return Boolean(prop('SUPABASE_URL', '') && prop('SUPABASE_KEY', '') && prop('STOCK_INGEST_SECRET', ''));
+}
+
+function supabaseRpc(fn, body) {
+  var url = prop('SUPABASE_URL', '').replace(/\/+$/, '') + '/rest/v1/rpc/' + fn;
+  var key = prop('SUPABASE_KEY', '');
+  var res = UrlFetchApp.fetch(url, {
+    method: 'post',
+    contentType: 'application/json',
+    headers: { apikey: key, Authorization: 'Bearer ' + key },
+    payload: JSON.stringify(body),
+    muteHttpExceptions: true,
+  });
+  var code = res.getResponseCode();
+  if (code >= 300) throw new Error('Supabase ' + fn + ' ' + code + ': ' + res.getContentText().slice(0, 200));
+}
+
+function publishToSupabase(payload, sourceMs) {
+  if (!supabaseConfigured()) return 'skipped (not configured)';
+  supabaseRpc('ingest_stock_snapshot', {
+    p_secret: prop('STOCK_INGEST_SECRET', ''),
+    p_payload: payload,
+    p_built_at: payload.generatedAt,
+    p_source_updated_at: sourceMs ? new Date(sourceMs).toISOString() : null,
+    p_build_ms: payload.meta && payload.meta.timings ? payload.meta.timings.totalMs : null,
+    p_engine: payload.meta ? String(payload.meta.engine || '') : null,
+  });
+  return 'ok';
+}
+
+/** Cheap heartbeat so the dashboard knows the sheets were checked even when nothing changed. */
+function heartbeatSupabase(status) {
+  if (!supabaseConfigured()) return;
+  try {
+    supabaseRpc('touch_stock_snapshot', {
+      p_secret: prop('STOCK_INGEST_SECRET', ''),
+      p_checked_at: new Date().toISOString(),
+      p_status: status,
+    });
+  } catch (e) {
+    // A missed heartbeat is harmless; the next tick retries.
+  }
+}
+
+// ── build + publish (shared by trigger, forced build and cache miss) ────────────────────────
+
+function buildAndPublish(state, engine, sourceMs) {
+  var t0 = Date.now();
+  var payload = buildPayload(engine);
+  var buildSec = (Date.now() - t0) / 1000;
+  try {
+    cachePut(payload);
+  } catch (e) {
+    state.lastCacheError = String(e).slice(0, 200);
+  }
+  try {
+    state.lastPublish = publishToSupabase(payload, sourceMs);
+    state.lastPublishError = null;
+  } catch (e) {
+    state.lastPublishError = String(e).slice(0, 300);
+  }
+  state.lastBuildAt = Date.now();
+  state.lastBuildSec = Math.round(buildSec * 10) / 10;
+  state.avgBuildSec = state.avgBuildSec
+    ? Math.round((state.avgBuildSec * 0.7 + buildSec * 0.3) * 10) / 10
+    : state.lastBuildSec;
+  state.builtSourceMs = sourceMs || state.builtSourceMs || null;
+  state.lastEngine = payload.meta.engine;
+  state.lastTimings = payload.meta.timings;
+  return payload;
+}
+
+// ── time trigger ────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Runs every TICK_MINUTES. Rebuilds only when a workbook changed (or the data is older than
+ * MAX_DATA_AGE_SEC), and only if the remaining daily trigger budget can afford it — the gap
+ * between builds widens automatically as the budget runs down, so the quota is never hit.
+ */
+function scheduledTick() {
+  var started = Date.now();
+  var state = loadState();
+  recordTriggerRuntime(state, 0); // roll the day over if needed
+  var decision = 'skip';
+  try {
+    var sourceMs = null;
+    try {
+      sourceMs = sourceModifiedMs();
+    } catch (e) {
+      state.lastChangeCheckError = String(e).slice(0, 200);
+    }
+    var now = Date.now();
+    var ageSec = state.lastBuildAt ? (now - state.lastBuildAt) / 1000 : Infinity;
+    var changed = sourceMs === null ? ageSec >= 15 * 60 : sourceMs > (state.builtSourceMs || 0);
+    var due = changed || ageSec >= MAX_DATA_AGE_SEC;
+
+    if (!due) {
+      decision = 'skip: no sheet changes';
+    } else {
+      var avg = state.avgBuildSec || DEFAULT_BUILD_SEC;
+      var secsLeft = secondsLeftInQuotaDay();
+      var checksReserve = (secsLeft / (TICK_MINUTES * 60)) * CHECK_COST_SEC;
+      var spendable = dailyBudgetSec() - (state.usedSec || 0) - checksReserve;
+      if (spendable < avg * 1.2) {
+        decision = 'skip: daily trigger budget nearly used';
+      } else {
+        var affordable = Math.max(1, Math.floor(spendable / avg));
+        var requiredGap = Math.max(MIN_BUILD_GAP_SEC, secsLeft / affordable);
+        if (ageSec < requiredGap) {
+          decision = 'skip: pacing (next build in ~' + Math.ceil((requiredGap - ageSec) / 60) + ' min)';
+        } else {
+          var lock = LockService.getScriptLock();
+          if (!lock.tryLock(0)) {
+            decision = 'skip: another build is running';
+          } else {
+            try {
+              buildAndPublish(state, 'fast', sourceMs);
+              state.buildsToday = (state.buildsToday || 0) + 1;
+              decision = 'built';
+            } finally {
+              lock.releaseLock();
+            }
+          }
+        }
+      }
+    }
+    if (decision !== 'built') heartbeatSupabase(decision);
+  } catch (err) {
+    decision = 'error: ' + String(err).slice(0, 200);
+    state.lastError = decision;
+  } finally {
+    state.lastTickAt = Date.now();
+    state.lastDecision = decision;
+    recordTriggerRuntime(state, (Date.now() - started) / 1000);
+    saveState(state);
+  }
+}
+
+/** Run once from the editor: (re)installs the 5-minute trigger and does the first build. */
+function setup() {
+  ScriptApp.getProjectTriggers().forEach(function (t) {
+    if (t.getHandlerFunction() === 'scheduledTick') ScriptApp.deleteTrigger(t);
+  });
+  ScriptApp.newTrigger('scheduledTick').timeBased().everyMinutes(TICK_MINUTES).create();
+  var state = loadState();
+  var sourceMs = null;
+  try {
+    sourceMs = sourceModifiedMs();
+  } catch (e) {
+    state.lastChangeCheckError = String(e).slice(0, 200);
+  }
+  buildAndPublish(state, 'fast', sourceMs);
+  saveState(state);
+  Logger.log(JSON.stringify(statusReport(state), null, 2));
+}
+
+/** Run from the editor to stop background builds. */
+function removeTriggers() {
+  ScriptApp.getProjectTriggers().forEach(function (t) {
+    if (t.getHandlerFunction() === 'scheduledTick') ScriptApp.deleteTrigger(t);
+  });
+}
+
+// ── web app ─────────────────────────────────────────────────────────────────────────────────
+
+function statusReport(state) {
+  return {
+    now: new Date().toISOString(),
+    lastBuildAt: state.lastBuildAt ? new Date(state.lastBuildAt).toISOString() : null,
+    lastBuildSec: state.lastBuildSec || null,
+    avgBuildSec: state.avgBuildSec || null,
+    lastEngine: state.lastEngine || null,
+    lastTimings: state.lastTimings || null,
+    lastTickAt: state.lastTickAt ? new Date(state.lastTickAt).toISOString() : null,
+    lastDecision: state.lastDecision || null,
+    sheetsModifiedAt: state.builtSourceMs ? new Date(state.builtSourceMs).toISOString() : null,
+    budget: {
+      quotaDay: state.usageDay || null,
+      usedMin: Math.round(((state.usedSec || 0) / 60) * 10) / 10,
+      budgetMin: dailyBudgetSec() / 60,
+      buildsToday: state.buildsToday || 0,
+    },
+    fastReader: Boolean(fastReaderAvailable()),
+    changeDetection: typeof Drive !== 'undefined',
+    supabase: supabaseConfigured(),
+    lastPublish: state.lastPublish || null,
+    lastPublishError: state.lastPublishError || null,
+    lastCacheError: state.lastCacheError || null,
+    lastChangeCheckError: state.lastChangeCheckError || null,
+    lastError: state.lastError || null,
+  };
+}
+
+function json(obj) {
+  return ContentService.createTextOutput(JSON.stringify(obj)).setMimeType(ContentService.MimeType.JSON);
+}
+
+function doGet(e) {
+  var params = (e && e.parameter) || {};
+  var state = loadState();
+
+  if (params.action === 'status') return json(statusReport(state));
+
+  // Side-by-side comparison build; not cached or published.
+  if (params.engine === 'legacy' || params.engine === 'fast') return json(buildPayload(params.engine));
+
+  var force = params.action === 'build';
+  if (!force) {
+    try {
+      var cached = cacheGet();
+      if (cached) return json(cached);
+    } catch (err) {
+      state.lastCacheError = String(err).slice(0, 200);
+    }
+  }
+
+  // Forced build (rate-limited) or cache miss: build now, then serve and publish it.
+  if (force && state.lastBuildAt && (Date.now() - state.lastBuildAt) / 1000 < FORCE_BUILD_COOLDOWN_SEC) {
+    var recent = cacheGet();
+    if (recent) return json(recent);
+  }
+  var lock = LockService.getScriptLock();
+  lock.waitLock(5 * 60 * 1000); // if a build is already running, wait for it and reuse it
+  try {
+    state = loadState();
+    if (!force && state.lastBuildAt && Date.now() - state.lastBuildAt < 60 * 1000) {
+      var fresh = cacheGet();
+      if (fresh) return json(fresh);
+    }
+    var sourceMs = null;
+    try {
+      sourceMs = sourceModifiedMs();
+    } catch (err) {
+      state.lastChangeCheckError = String(err).slice(0, 200);
+    }
+    var payload = buildAndPublish(state, 'fast', sourceMs);
+    saveState(state);
+    return json(payload);
+  } finally {
+    lock.releaseLock();
+  }
 }

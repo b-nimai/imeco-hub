@@ -54,7 +54,7 @@ const ALLOWED_STATUSES: Record<StatusScope, Set<ProductStatus>> = {
 };
 
 export default function StockPage() {
-  const { payload, source, fetchedAt, syncing, loading, error, isLiveConfigured, refresh } =
+  const { payload, source, via, fetchedAt, syncing, loading, error, isLiveConfigured, refresh } =
     useStockData();
   // Live sync failed but recent (≤2h) last-fetched data is on screen.
   const isFallback = Boolean(error && payload);
@@ -227,7 +227,7 @@ export default function StockPage() {
                 : error && payload
                   ? `Latest sync failed (${error}). Showing data synced ${new Date(fetchedAt ?? 0).toLocaleString('en-IN')}. Click ↻ to retry.`
                   : fetchedAt
-                    ? `Last synced: ${new Date(fetchedAt).toLocaleString('en-IN')} · Auto-refreshes every 5m`
+                    ? `Sheets last checked: ${new Date(fetchedAt).toLocaleString('en-IN')} · via ${via === 'supabase' ? 'Supabase (background build)' : 'Apps Script (direct)'} · Auto-refreshes every 5m`
                     : 'Click for Google Apps Script proxy connection details'
             }
           >
