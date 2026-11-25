@@ -54,7 +54,8 @@ function absence(cell: Cell, row: Row): { text: string; title: string; tone: str
     case 'not_listed':
       return {
         text: '—',
-        title: `${head}: no link in the spreadsheet`,
+        // A Meesho product can have a link yet no price: "Not in the Meesho sheet".
+        title: `${head}: ${cell.note ?? 'no link in the spreadsheet'}`,
         tone: 'text-muted-foreground/40',
       };
     case 'pending':
