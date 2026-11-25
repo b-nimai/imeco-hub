@@ -493,7 +493,7 @@ export default function OverviewView({
           icon={Boxes}
           action={<LinkButton onClick={() => onNavigate('availability')}>Stock</LinkButton>}
         >
-          <div className="grid grid-cols-4 gap-2">
+          <div className="grid grid-cols-5 gap-2">
             {MARKETPLACES.map((m) => {
               const listed = rows.filter((r) => r.cells[m].url);
               const ok = listed.filter((r) => r.cells[m].status === 'ok').length;

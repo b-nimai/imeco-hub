@@ -38,6 +38,7 @@ function row(
       flipkart: cell('flipkart', null),
       blinkit: cell('blinkit', null),
       myntra: cell('myntra', null),
+      meesho: cell('meesho', null),
     },
   } as unknown as Row;
 }

@@ -1,9 +1,17 @@
 // The shapes the dashboard works in, and the transform from Supabase rows into them.
 
-// Mirrors desktop/models.py — the two must stay in step. `buildPriceData` skips any marketplace
-// not in this tuple, so taking one out hides its column without deleting its history.
-export const MARKETPLACES = ['amazon', 'flipkart', 'blinkit', 'myntra'] as const;
+// Mirrors desktop/models.py (plus `meesho`, which the desktop app reads from a Google Sheet in
+// desktop/meesho.py rather than scraping). `buildPriceData` skips any marketplace not in this
+// tuple, so taking one out hides its column without deleting its history.
+export const MARKETPLACES = ['amazon', 'flipkart', 'blinkit', 'myntra', 'meesho'] as const;
 export type Marketplace = (typeof MARKETPLACES)[number];
+
+/**
+ * Marketplaces saved only when a price or stock state CHANGES, not every hour. Meesho's prices
+ * come from the Meesho team's sheet, which moves a few times a week, so its rows are sparse and
+ * supabaseClient carries each reading forward until the next one (see data/changeOnly.ts).
+ */
+export const CHANGE_ONLY_MARKETPLACES: readonly Marketplace[] = ['meesho'];
 
 /** Where the sheet has competitor links. Myntra tracks IMECO's own listings only. */
 export const RIVAL_MARKETPLACES = ['amazon', 'flipkart', 'blinkit'] as const;
@@ -16,6 +24,7 @@ export const MARKETPLACE_LABELS: Record<Marketplace, string> = {
   flipkart: 'Flipkart',
   blinkit: 'Blinkit',
   myntra: 'Myntra',
+  meesho: 'Meesho',
 };
 
 /**
@@ -28,6 +37,7 @@ export const MARKETPLACE_COLORS: Record<Marketplace, string> = {
   flipkart: 'var(--chart-2)',
   blinkit: 'var(--chart-3)',
   myntra: 'var(--chart-4)',
+  meesho: 'var(--chart-5)',
 };
 
 /**

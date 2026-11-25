@@ -8,7 +8,14 @@
 // enables RLS with select-only policies, so this key cannot write. If that ever stops being
 // true, this key stops being safe. See supabase/schema.sql.
 
-import type { ProductRow, SnapshotRow } from './types';
+import {
+  availabilityFromChanges,
+  dailyFromChanges,
+  istDay,
+  padHistory,
+  type ChangeRow,
+} from './changeOnly';
+import { CHANGE_ONLY_MARKETPLACES, type ProductRow, type SnapshotRow } from './types';
 
 const URL = import.meta.env.VITE_SUPABASE_URL as string | undefined;
 const KEY = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
@@ -145,15 +152,55 @@ export interface HistoryRow {
   checked_at: string;
 }
 
+const isChangeOnly = (marketplace: string) =>
+  (CHANGE_ONLY_MARKETPLACES as readonly string[]).includes(marketplace);
+
+/**
+ * Every row of the change-only marketplaces, ever. Saved only on a change, so this is a few
+ * rows per listing per week — small enough to fetch whole and carry forward in the browser.
+ */
+async function fetchChangeRows(): Promise<ChangeRow[]> {
+  return getAll<ChangeRow>(
+    `price_snapshots?select=sku,marketplace,price,status,checked_at` +
+      `&marketplace=in.(${CHANGE_ONLY_MARKETPLACES.join(',')})&order=checked_at.asc,id.asc`,
+    'change-only history',
+  );
+}
+
 /** Every reading of one product over the last `days`, oldest first. */
 export async function fetchHistory(sku: string, days: number): Promise<HistoryRow[]> {
+  const now = new Date().toISOString();
   const since = new Date(Date.now() - days * 86_400_000).toISOString();
-  return getAll<HistoryRow>(
-    `price_snapshots?select=marketplace,price,status,checked_at` +
-      `&sku=eq.${encodeURIComponent(sku)}&checked_at=gte.${encodeURIComponent(since)}` +
-      `&order=checked_at.asc,id.asc`,
-    'history',
-  );
+  const sku_ = encodeURIComponent(sku);
+  const [rows, ...before] = await Promise.all([
+    getAll<HistoryRow>(
+      `price_snapshots?select=marketplace,price,status,checked_at` +
+        `&sku=eq.${sku_}&checked_at=gte.${encodeURIComponent(since)}` +
+        `&order=checked_at.asc,id.asc`,
+      'history',
+    ),
+    // A change-only listing's price in force when the window opened is its newest row BEFORE
+    // the window — possibly weeks old. Without it a quiet week would chart as nothing.
+    ...CHANGE_ONLY_MARKETPLACES.map((m) =>
+      get<HistoryRow[]>(
+        `price_snapshots?select=marketplace,price,status,checked_at` +
+          `&sku=eq.${sku_}&marketplace=eq.${m}&checked_at=lt.${encodeURIComponent(since)}` +
+          `&order=checked_at.desc,id.desc&limit=1`,
+        'history',
+      ),
+    ),
+  ]);
+  return [
+    ...rows.filter((r) => !isChangeOnly(r.marketplace)),
+    ...CHANGE_ONLY_MARKETPLACES.flatMap((m, i) =>
+      padHistory(
+        rows.filter((r) => r.marketplace === m),
+        before[i][0] ?? null,
+        since,
+        now,
+      ),
+    ),
+  ];
 }
 
 export interface PriceStatsRow {
@@ -191,11 +238,19 @@ export interface PriceDailyRow {
 /** Per listing per day — the `price_daily` view. ~8k rows for 30 days of the whole catalogue. */
 export async function fetchPriceDaily(days: number): Promise<PriceDailyRow[]> {
   const since = new Date(Date.now() - days * 86_400_000).toISOString().slice(0, 10);
-  return getAll<PriceDailyRow>(
-    `price_daily?select=sku,marketplace,day,close_price,low_price,high_price,readings,in_stock` +
-      `&day=gte.${since}&order=day.asc,sku.asc,marketplace.asc`,
-    'price_daily',
-  );
+  const [rows, changes] = await Promise.all([
+    getAll<PriceDailyRow>(
+      `price_daily?select=sku,marketplace,day,close_price,low_price,high_price,readings,in_stock` +
+        `&day=gte.${since}&order=day.asc,sku.asc,marketplace.asc`,
+      'price_daily',
+    ),
+    fetchChangeRows(),
+  ]);
+  // The view only has rows for the days a change-only listing CHANGED; rebuild every day.
+  return [
+    ...rows.filter((r) => !isChangeOnly(r.marketplace)),
+    ...dailyFromChanges(changes, since, istDay(Date.now())),
+  ].sort((a, b) => a.day.localeCompare(b.day));
 }
 
 // ── availability & ratings (their tabs) ─────────────────────────────────────────────────
@@ -216,11 +271,19 @@ export interface AvailabilityRow {
 }
 
 export async function fetchAvailability(): Promise<AvailabilityRow[]> {
-  return getAll<AvailabilityRow>(
-    'availability_stats?select=sku,marketplace,status_now,checks_7d,in_stock_7d,checks_30d,in_stock_30d,status_since,unchanged_30d' +
-      '&order=sku.asc,marketplace.asc',
-    'availability_stats',
-  );
+  const [rows, changes] = await Promise.all([
+    getAll<AvailabilityRow>(
+      'availability_stats?select=sku,marketplace,status_now,checks_7d,in_stock_7d,checks_30d,in_stock_30d,status_since,unchanged_30d' +
+        '&order=sku.asc,marketplace.asc',
+      'availability_stats',
+    ),
+    fetchChangeRows(),
+  ]);
+  // The view counts hourly readings; a change-only listing has a few a week. Count days instead.
+  return [
+    ...rows.filter((r) => !isChangeOnly(r.marketplace)),
+    ...availabilityFromChanges(changes, Date.now()),
+  ];
 }
 
 export interface StoreRow {

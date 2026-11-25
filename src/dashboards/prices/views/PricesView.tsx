@@ -290,7 +290,7 @@ export default function PricesView({ rows, showUnlisted }: { rows: Row[]; showUn
 
   return (
     <div className="flex min-w-0 flex-col gap-3">
-      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
         {MARKETPLACES.map((m) => (
           <MarketCard key={m} m={m} rows={rows} />
         ))}
