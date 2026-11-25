@@ -12,6 +12,7 @@ import { fetchPriceDaily, fetchPriceStats } from '@/dashboards/prices/data/supab
 import {
   MARKETPLACE_COLORS,
   MARKETPLACE_LABELS,
+  MARKETPLACE_SOURCE,
   MARKETPLACES,
   sheetOrder,
   type Cell,
@@ -139,8 +140,9 @@ function PriceCell({
   if (price == null) {
     const a = absence(cell, row);
     const oosPrice = cell.status === 'out_of_stock' && cell.price != null;
+    const source = MARKETPLACE_SOURCE[market]?.note;
     return (
-      <ListingLink url={cell.url} market={market} title={a.title}>
+      <ListingLink url={cell.url} market={market} title={[a.title, source].filter(Boolean).join('\n')}>
         <span className={cn('flex flex-col gap-0.5', a.tone, cell.url && 'group-hover:underline')}>
           {oosPrice && (
             <span className="text-sm text-muted-foreground line-through tabular-nums">
@@ -167,7 +169,14 @@ function PriceCell({
     <ListingLink
       url={cell.url}
       market={market}
-      title={[vsTsp, cell.note, cell.unit].filter(Boolean).join(' · ') || undefined}
+      title={
+        [
+          [vsTsp, cell.note, cell.unit].filter(Boolean).join(' · '),
+          MARKETPLACE_SOURCE[market]?.note,
+        ]
+          .filter(Boolean)
+          .join('\n') || undefined
+      }
       className={cn(
         '-mx-2 flex flex-col gap-0.5 rounded-lg px-2 py-1 transition-colors',
         standing === 'below' && 'bg-rose-500/10 ring-1 ring-rose-500/40 hover:bg-rose-500/20',
@@ -335,8 +344,17 @@ export default function PricesView({ rows, showUnlisted }: { rows: Row[]; showUn
                   TSP
                 </th>
                 {MARKETPLACES.map((m) => (
-                  <th key={m} className="px-4 py-2 text-left font-medium">
+                  <th
+                    key={m}
+                    className="px-4 py-2 text-left font-medium"
+                    title={MARKETPLACE_SOURCE[m]?.note}
+                  >
                     <Where marketplace={m} className="inline-flex items-center gap-1.5" />
+                    {MARKETPLACE_SOURCE[m] && (
+                      <span className="ml-1.5 text-[10px] font-normal text-muted-foreground">
+                        {MARKETPLACE_SOURCE[m].tag}
+                      </span>
+                    )}
                   </th>
                 ))}
               </tr>

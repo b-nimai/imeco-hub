@@ -28,6 +28,20 @@ export const MARKETPLACE_LABELS: Record<Marketplace, string> = {
 };
 
 /**
+ * Where a marketplace's prices come from, when that is NOT a reading of the live page. Shown on
+ * hover so a number like Meesho's ₹204 (₹95 + ₹107 delivery on the page) is not taken for the
+ * page price.
+ */
+export const MARKETPLACE_SOURCE: Partial<Record<Marketplace, { tag: string; note: string }>> = {
+  meesho: {
+    tag: 'seller export',
+    note:
+      "From Meesho's seller export sheet (Price Recommendations), not the live page. " +
+      'Where Meesho shows delivery separately, this is the total incl. delivery.',
+  },
+};
+
+/**
  * Series colour per marketplace, for charts. Fixed to the marketplace, never to its rank, so a
  * channel keeps its colour when another drops out. These are the first `--chart-*` slots of the
  * theme, in order.
