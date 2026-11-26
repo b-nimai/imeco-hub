@@ -28,6 +28,8 @@ const TARGET = {
 
 export interface BillingProduct {
   name: string;
+  /** Empty when the sheet has no SKU column, or this row's SKU cell is blank. */
+  sku: string;
   brand: string;
   image: string | null;
   imageFull: string | null;
@@ -88,28 +90,47 @@ function cellText(cell: unknown): string {
   return String(cell).trim();
 }
 
-// Locate the image / product-name / brand columns from the header, falling back to the
-// sheet's conventional A=image, B=name layout when the headers are named something
-// unexpected. A missing brand column is fine — brandCol stays -1.
-function resolveLayout(header: unknown[]) {
+// Identifier columns: they hold codes, not billing figures, so they must never become a
+// channel. Before this list an EAN column rendered as "89,06,20,07,91" — a 13-digit barcode
+// formatted as rupees — and was summed into each product's total.
+const IDENTIFIER = /^(ean|ean ?13|barcode|bar code|gtin|upc|hsn|hsn code|asin|fsn)$/i;
+
+// Locate the image / SKU / product-name / brand columns from the header, falling back to
+// the sheet's conventional A=image, B=name layout when the headers are named something
+// unexpected. A missing SKU or brand column is fine — that index stays -1.
+//
+// SKU is resolved separately and BEFORE the name. The name search used to accept "sku", and
+// with the header `Item Image | SKU | Product Name | …` it took the SKU column as the name,
+// which pushed "Product Name" into the channels (where its text parsed as numbers: "60 Pulls
+// x 6 Rolls" became 606) and showed a SKU-less row as "Row 5".
+export function resolveLayout(header: unknown[]) {
   const labels = header.map((h) => cellText(h));
   const imageCol = labels.findIndex((h) => /image|photo|picture|thumbnail/i.test(h));
+  const skuCol = labels.findIndex((h, i) => i !== imageCol && /^(sku|sku code|sku id)$/i.test(h));
+  const taken = (i: number) => i === imageCol || i === skuCol;
+  // An explicit "Product Name" / "Name" header wins over looser matches like "Item".
   let nameCol = labels.findIndex(
-    (h, i) => i !== imageCol && /name|product|item|sku|description/i.test(h),
-  );
-  const brandCol = labels.findIndex(
-    (h, i) => i !== imageCol && i !== nameCol && /^brands?$/i.test(h),
+    (h, i) => !taken(i) && /^(product ?name|item ?name|name|product|description)$/i.test(h),
   );
   if (nameCol === -1)
-    nameCol = labels.findIndex((h, i) => i !== imageCol && i !== brandCol && h !== '');
+    nameCol = labels.findIndex(
+      (h, i) => !taken(i) && !IDENTIFIER.test(h) && /name|product|item|description/i.test(h),
+    );
+  const brandCol = labels.findIndex(
+    (h, i) => !taken(i) && i !== nameCol && /^brands?$/i.test(h),
+  );
+  if (nameCol === -1)
+    nameCol = labels.findIndex(
+      (h, i) => !taken(i) && i !== brandCol && h !== '' && !IDENTIFIER.test(h),
+    );
   if (nameCol === -1) nameCol = imageCol === 0 ? 1 : 0;
 
   const channels: { name: string; col: number }[] = [];
   labels.forEach((label, i) => {
-    if (i === imageCol || i === nameCol || i === brandCol || !label) return;
+    if (taken(i) || i === nameCol || i === brandCol || !label || IDENTIFIER.test(label)) return;
     channels.push({ name: label, col: i });
   });
-  return { imageCol, nameCol, brandCol, channels };
+  return { imageCol, skuCol, nameCol, brandCol, channels };
 }
 
 async function resolveSheetName(): Promise<string> {
@@ -131,7 +152,7 @@ export async function fetchBillingData(): Promise<BillingData> {
 
   if (!values.length) throw new Error(`Sheet "${sheetName}" is empty`);
 
-  const { imageCol, nameCol, brandCol, channels } = resolveLayout(values[0] ?? []);
+  const { imageCol, skuCol, nameCol, brandCol, channels } = resolveLayout(values[0] ?? []);
   if (!channels.length) throw new Error('No channel columns found in the header row');
 
   const products: BillingProduct[] = [];
@@ -139,7 +160,8 @@ export async function fetchBillingData(): Promise<BillingData> {
   for (let r = 1; r < values.length; r++) {
     const row = values[r] ?? [];
     const formulaRow = formulas[r] ?? [];
-    const name = cellText(row[nameCol]);
+    const sku = skuCol >= 0 ? cellText(row[skuCol]) : '';
+    const name = cellText(row[nameCol]) || sku;
     const perChannel: Record<string, number> = {};
     let total = 0;
     for (const ch of channels) {
@@ -158,6 +180,7 @@ export async function fetchBillingData(): Promise<BillingData> {
         : { thumb: null, full: null };
     products.push({
       name: name || `Row ${r + 1}`,
+      sku,
       brand,
       image: images.thumb,
       imageFull: images.full,

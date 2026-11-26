@@ -47,6 +47,9 @@ export function ProductModal({ product, channels, onClose }: Props) {
               {product.name}
             </div>
             <div className="mt-1 text-[11px] font-bold tracking-widest text-[#22c55e] uppercase">
+              {product.sku && product.sku !== product.name && (
+                <span className="mr-3 text-[#64748b]">{product.sku}</span>
+              )}
               Inclusive of GST
             </div>
           </div>

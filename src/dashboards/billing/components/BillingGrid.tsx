@@ -55,7 +55,9 @@ export function BillingGrid({ products, channels, brands = [] }: Props) {
     const byBrand = activeBrands.length
       ? products.filter((p) => activeBrands.includes(p.brand))
       : products;
-    const filtered = q ? byBrand.filter((p) => p.name.toLowerCase().includes(q)) : byBrand;
+    const filtered = q
+      ? byBrand.filter((p) => p.name.toLowerCase().includes(q) || p.sku.toLowerCase().includes(q))
+      : byBrand;
     if (!sortKey) return filtered; // preserve the sheet's own row order
     const dir = sortDir === 'asc' ? 1 : -1;
     return [...filtered].sort((a, b) => {
@@ -169,7 +171,10 @@ export function BillingGrid({ products, channels, brands = [] }: Props) {
                 return (
                   <th
                     key={ch}
-                    className="cursor-pointer px-3 py-3 text-center text-[13px] font-black tracking-[0.15em] whitespace-nowrap uppercase transition-opacity select-none hover:opacity-85"
+                    // Wraps rather than nowrap: the columns are fixed-width, so a long channel
+                    // name ("Blinkit (New SP)", "Swiggy Instamart") on one line spilled over its
+                    // neighbours' headers.
+                    className="cursor-pointer px-2 py-2 text-center text-[13px] leading-tight font-black tracking-[0.08em] break-words uppercase transition-opacity select-none hover:opacity-85"
                     // RK and Clicktech are both white, so without a divider their headers
                     // would read as one continuous block instead of two columns.
                     style={{ background: brand.bg, color: brand.fg, borderLeft: '2px solid #0a1628' }}
@@ -186,17 +191,19 @@ export function BillingGrid({ products, channels, brands = [] }: Props) {
           <tbody>
             {rows.map((p, i) => (
               <tr
-                key={`${p.name}-${i}`}
+                key={`${p.sku || p.name}-${i}`}
                 className="border-b border-[#1a2d45]/50 transition-colors hover:bg-[#0d1f35]/70"
               >
                 <td className="px-3 py-2">
                   <ProductImage src={p.image} name={p.name} onClick={() => setSelected(p)} />
                 </td>
-                <td
-                  className="truncate px-3 py-2 text-[15px] font-semibold text-[#e2e8f0]"
-                  title={p.name}
-                >
-                  {p.name}
+                <td className="px-3 py-2" title={p.sku ? `${p.name} (${p.sku})` : p.name}>
+                  <div className="truncate text-[15px] font-semibold text-[#e2e8f0]">{p.name}</div>
+                  {p.sku && p.sku !== p.name && (
+                    <div className="truncate text-[11px] font-bold tracking-wider text-[#64748b]">
+                      {p.sku}
+                    </div>
+                  )}
                 </td>
                 {channels.map((ch) => {
                   const v = p.values[ch] || 0;
