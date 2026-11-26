@@ -56,7 +56,12 @@ export function BillingGrid({ products, channels, brands = [] }: Props) {
       ? products.filter((p) => activeBrands.includes(p.brand))
       : products;
     const filtered = q
-      ? byBrand.filter((p) => p.name.toLowerCase().includes(q) || p.sku.toLowerCase().includes(q))
+      ? byBrand.filter(
+          (p) =>
+            p.name.toLowerCase().includes(q) ||
+            p.sku.toLowerCase().includes(q) ||
+            p.ean.includes(q),
+        )
       : byBrand;
     if (!sortKey) return filtered; // preserve the sheet's own row order
     const dir = sortDir === 'asc' ? 1 : -1;
@@ -177,7 +182,11 @@ export function BillingGrid({ products, channels, brands = [] }: Props) {
                     className="cursor-pointer px-2 py-2 text-center text-[13px] leading-tight font-black tracking-[0.08em] break-words uppercase transition-opacity select-none hover:opacity-85"
                     // RK and Clicktech are both white, so without a divider their headers
                     // would read as one continuous block instead of two columns.
-                    style={{ background: brand.bg, color: brand.fg, borderLeft: '2px solid #0a1628' }}
+                    style={{
+                      background: brand.bg,
+                      color: brand.fg,
+                      borderLeft: '2px solid #0a1628',
+                    }}
                     onClick={() => toggleSort(ch)}
                   >
                     {ch}
@@ -197,11 +206,23 @@ export function BillingGrid({ products, channels, brands = [] }: Props) {
                 <td className="px-3 py-2">
                   <ProductImage src={p.image} name={p.name} onClick={() => setSelected(p)} />
                 </td>
-                <td className="px-3 py-2" title={p.sku ? `${p.name} (${p.sku})` : p.name}>
+                <td
+                  className="px-3 py-2"
+                  title={[p.name, p.sku && `SKU ${p.sku}`, p.ean && `EAN ${p.ean}`]
+                    .filter(Boolean)
+                    .join(' · ')}
+                >
                   <div className="truncate text-[15px] font-semibold text-[#e2e8f0]">{p.name}</div>
-                  {p.sku && p.sku !== p.name && (
-                    <div className="truncate text-[11px] font-bold tracking-wider text-[#64748b]">
-                      {p.sku}
+                  {/* SKU, then the EAN to its right. Either may be missing in the sheet. */}
+                  {((p.sku && p.sku !== p.name) || p.ean) && (
+                    <div className="flex min-w-0 items-center gap-3 text-[11px] font-bold tracking-wider text-[#64748b]">
+                      {p.sku && p.sku !== p.name && <span className="truncate">{p.sku}</span>}
+                      {p.ean && (
+                        <span className="flex-none tabular-nums">
+                          <span className="text-[#475569]">EAN </span>
+                          {p.ean}
+                        </span>
+                      )}
                     </div>
                   )}
                 </td>

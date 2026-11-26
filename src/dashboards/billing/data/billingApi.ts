@@ -30,6 +30,8 @@ export interface BillingProduct {
   name: string;
   /** Empty when the sheet has no SKU column, or this row's SKU cell is blank. */
   sku: string;
+  /** Barcode from the EAN column, as digits. Empty when there is no EAN column or cell. */
+  ean: string;
   brand: string;
   image: string | null;
   imageFull: string | null;
@@ -85,6 +87,15 @@ function toImageUrls(cell: unknown): { thumb: string | null; full: string | null
   return { thumb: url, full: url };
 }
 
+// The sheet stores an EAN as a NUMBER (UNFORMATTED_VALUE returns 8906200791477), so it must
+// be printed as plain digits: no grouping, and never exponent notation. 13 digits is well
+// inside a double's exact-integer range, so nothing is lost converting it.
+export function toEan(cell: unknown): string {
+  if (typeof cell === 'number')
+    return Number.isFinite(cell) && cell > 0 ? Math.round(cell).toFixed(0) : '';
+  return cellText(cell).replace(/\s+/g, '');
+}
+
 function cellText(cell: unknown): string {
   if (cell === null || cell === undefined) return '';
   return String(cell).trim();
@@ -116,9 +127,7 @@ export function resolveLayout(header: unknown[]) {
     nameCol = labels.findIndex(
       (h, i) => !taken(i) && !IDENTIFIER.test(h) && /name|product|item|description/i.test(h),
     );
-  const brandCol = labels.findIndex(
-    (h, i) => !taken(i) && i !== nameCol && /^brands?$/i.test(h),
-  );
+  const brandCol = labels.findIndex((h, i) => !taken(i) && i !== nameCol && /^brands?$/i.test(h));
   if (nameCol === -1)
     nameCol = labels.findIndex(
       (h, i) => !taken(i) && i !== brandCol && h !== '' && !IDENTIFIER.test(h),
@@ -130,7 +139,11 @@ export function resolveLayout(header: unknown[]) {
     if (taken(i) || i === nameCol || i === brandCol || !label || IDENTIFIER.test(label)) return;
     channels.push({ name: label, col: i });
   });
-  return { imageCol, skuCol, nameCol, brandCol, channels };
+  // Still an identifier (never a channel), but shown under the product name beside the SKU.
+  const eanCol = labels.findIndex(
+    (h, i) => !taken(i) && /^(ean|ean ?13|barcode|bar code|gtin)$/i.test(h),
+  );
+  return { imageCol, skuCol, eanCol, nameCol, brandCol, channels };
 }
 
 async function resolveSheetName(): Promise<string> {
@@ -152,7 +165,7 @@ export async function fetchBillingData(): Promise<BillingData> {
 
   if (!values.length) throw new Error(`Sheet "${sheetName}" is empty`);
 
-  const { imageCol, skuCol, nameCol, brandCol, channels } = resolveLayout(values[0] ?? []);
+  const { imageCol, skuCol, eanCol, nameCol, brandCol, channels } = resolveLayout(values[0] ?? []);
   if (!channels.length) throw new Error('No channel columns found in the header row');
 
   const products: BillingProduct[] = [];
@@ -161,6 +174,7 @@ export async function fetchBillingData(): Promise<BillingData> {
     const row = values[r] ?? [];
     const formulaRow = formulas[r] ?? [];
     const sku = skuCol >= 0 ? cellText(row[skuCol]) : '';
+    const ean = eanCol >= 0 ? toEan(row[eanCol]) : '';
     const name = cellText(row[nameCol]) || sku;
     const perChannel: Record<string, number> = {};
     let total = 0;
@@ -181,6 +195,7 @@ export async function fetchBillingData(): Promise<BillingData> {
     products.push({
       name: name || `Row ${r + 1}`,
       sku,
+      ean,
       brand,
       image: images.thumb,
       imageFull: images.full,

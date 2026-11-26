@@ -43,12 +43,18 @@ export function ProductModal({ product, channels, onClose }: Props) {
       >
         <div className="flex flex-none items-start justify-between gap-4 border-b border-[#1a2d45] px-5 py-3">
           <div className="min-w-0">
-            <div className="truncate text-lg leading-tight font-black text-white" title={product.name}>
+            <div
+              className="truncate text-lg leading-tight font-black text-white"
+              title={product.name}
+            >
               {product.name}
             </div>
             <div className="mt-1 text-[11px] font-bold tracking-widest text-[#22c55e] uppercase">
               {product.sku && product.sku !== product.name && (
                 <span className="mr-3 text-[#64748b]">{product.sku}</span>
+              )}
+              {product.ean && (
+                <span className="mr-3 text-[#64748b] tabular-nums">EAN {product.ean}</span>
               )}
               Inclusive of GST
             </div>
