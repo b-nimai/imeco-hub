@@ -150,8 +150,13 @@ function parseMonthFY(rows) {
     } else {
       // Everything beyond the 5 named channels rolls up into "Others".
       othersTotal += val;
-      // D2C Website / D2C Website & Bulk are one channel under two column names
-      otherNames.add(/^d2c website/i.test(name) ? 'D2C Website & Bulk' : name);
+      // Normalize channels whose column names vary across months
+      const normalized = /^d2c website/i.test(name)
+        ? 'D2C Website & Bulk'
+        : /^myntra/i.test(name)
+          ? 'Myntra (incl. SJIT)'
+          : name;
+      otherNames.add(normalized);
     }
   }
 
